@@ -89,7 +89,7 @@
   "gui.meplacementtool.collapse_colors": "カラーメニューを閉じる",
   "gui.meplacementtool.mark_hint": "[%s]を押してブックマーク",
   "gui.meplacementtool.need_spectrum_key": "スペクトラムの鍵が必要です",
-  "key.meplacementtool.mark_color": "色をショートカットに登録",
+  "key.meplacementtool.mark_color": "色をブックマークに登録",
   "block.meplacementtool.moakiee_fumo": "Moakieeのぬい",
   "block.meplacementtool.cystrysu_fumo": "Cystrysuのぬい"
 }
