@@ -1,7 +1,7 @@
 ---
 navigation:
   parent: introduction/index.md
-  title: 一括設置ツール
+  title: ME一括設置ツール
   position: 2
   icon: meplacementtool:multiblock_placement_tool
 categories:
@@ -10,11 +10,11 @@ item_ids:
   - meplacementtool:multiblock_placement_tool
 ---
 
-# 一括設置ツール
+# ME一括設置ツール
 
 <ItemImage id="meplacementtool:multiblock_placement_tool" scale="4" />
 
-一括設置ツールは、同一のブロックを一度に複数配置できる強力な一括配置ツールです。同じ種類のブロックの表面に沿って自動的に拡張されるため、巨大な構造物を素早く構築するのに最適です。
+ME一括設置ツールは、同一のブロックを一度に複数配置できる強力な一括配置ツールです。同じ種類のブロックの表面に沿って自動的に拡張されるため、巨大な構造物を素早く構築するのに最適です。
 
 ## 機能
 
