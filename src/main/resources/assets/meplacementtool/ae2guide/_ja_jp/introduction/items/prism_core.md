@@ -14,6 +14,6 @@ item_ids:
 
 <ItemImage id="meplacementtool:prism_core" scale="4" />
 
-**プリズムコア**は **<ItemLink id="meplacementtool:key_of_spectrum" />** を作成するために使用されるクラフトの中間素材アイテムです。
+**プリズムコア**は **<ItemLink id="meplacementtool:key_of_spectrum" />** をクラフトする際に必要な中間素材です。
 
 <RecipeFor id="meplacementtool:prism_core" />
