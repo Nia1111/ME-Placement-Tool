@@ -5,7 +5,7 @@
   "item.meplacementtool.key_of_spectrum": "§c色§6彩§eの§a鍵",
   "tooltip.meplacementtool.key_of_spectrum": "§7—§b凝集せし光は色彩を成し、§e触るればたちまち染まりゆく",
   "item.meplacementtool.prism_core": "プリズムコア",
-  "tooltip.meplacementtool.prism_core.prefix": "§7——§bあらゆる色彩が§eここに集まり、§7、最後の§d儀式§7を待っている。それはやがて、§c色§6彩§eの§a鍵§7へと姿を変える。",
+  "tooltip.meplacementtool.prism_core.prefix": "§7——§bあらゆる色が§e此処に集う§7。最後の§d儀式§7により、それは§c色§6彩§eの§a鍵§7へと姿を変える。",
   "tooltip.meplacementtool.prism_core.rainbow": "色彩の鍵",
   "message.meplacementtool.device_not_powered": "電力不足",
   "message.meplacementtool.no_configured_item": "スロットにアイテムが登録されていません",
