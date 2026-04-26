@@ -1,9 +1,6 @@
 package com.moakiee.meplacementtool.client;
 
-import com.moakiee.meplacementtool.ItemMECablePlacementTool;
-import com.moakiee.meplacementtool.ItemMEPlacementTool;
-import com.moakiee.meplacementtool.ItemMultiblockPlacementTool;
-import com.moakiee.meplacementtool.WandMenu;
+import com.moakiee.meplacementtool.*;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.nbt.CompoundTag;
@@ -34,9 +31,6 @@ public class ToolInfoHudRenderer {
     private static final int LINE_HEIGHT = 10;
     private static final int TEXT_COLOR = 0xFFFFFF;
     private static final int TEXT_COLOR_DIM = 0xAAAAAA;
-    
-    // HUD display duration in milliseconds
-    private static final long HUD_DISPLAY_DURATION = 2000L;
     
     // Track the last held tool item to detect switching
     private Item lastHeldToolItem = null;
@@ -92,9 +86,13 @@ public class ToolInfoHudRenderer {
                 toolSwitchTime = currentTime;
                 lastHeldToolItem = currentToolItem;
             }
-            
+
+            // Refer to ClientConfig.HUD_DISPLAY_DURATION
+            if(ClientConfig.hudDisplayDuration == 0) {
+                return;
+            }
             // Check if we're within the display duration
-            if (currentTime - toolSwitchTime > HUD_DISPLAY_DURATION) {
+            if (ClientConfig.hudDisplayDuration > 0 && currentTime - toolSwitchTime > ClientConfig.hudDisplayDuration) {
                 // Time expired, don't render
                 return;
             }

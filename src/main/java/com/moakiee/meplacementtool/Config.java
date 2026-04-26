@@ -90,6 +90,8 @@ public class Config
     @SubscribeEvent
     static void onLoad(final ModConfigEvent event)
     {
+        if(event.getConfig().getSpec() != Config.SPEC) return;
+
         mePlacementToolEnergyCapacity = ME_PLACEMENT_TOOL_ENERGY_CAPACITY.get();
         mePlacementToolEnergyCost = ME_PLACEMENT_TOOL_ENERGY_COST.get();
         multiblockPlacementToolEnergyCapacity = MULTIBLOCK_PLACEMENT_TOOL_ENERGY_CAPACITY.get();

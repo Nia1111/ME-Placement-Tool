@@ -9,6 +9,7 @@ import appeng.api.parts.IPartHost;
 import appeng.api.parts.IPartItem;
 import appeng.api.parts.PartHelper;
 import appeng.api.stacks.AEKey;
+import appeng.helpers.IMouseWheelItem;
 import appeng.menu.locator.MenuLocators;
 import appeng.menu.me.crafting.CraftAmountMenu;
 import appeng.parts.PartPlacement;
@@ -42,7 +43,7 @@ import org.jetbrains.annotations.Nullable;
 import java.util.ArrayList;
 import java.util.List;
 
-public class ItemMECablePlacementTool extends BasePlacementToolItem implements IMenuItem {
+public class ItemMECablePlacementTool extends BasePlacementToolItem implements IMenuItem, IMouseWheelItem {
 
     /**
      * Check if a cable can be placed at the given position.
@@ -829,6 +830,25 @@ public class ItemMECablePlacementTool extends BasePlacementToolItem implements I
             return AEColor.values()[tag.getInt("Color")];
         }
         return AEColor.TRANSPARENT;
+    }
+
+    /// Cycle to the next color in the enum and save it. Returns the new color
+    public static AEColor cycleColor(ItemStack stack, int offset) {
+        AEColor current = getColor(stack);
+        // If has upgrade, cycle through all colors
+        if(hasUpgrade(stack)) {
+            int nextOrdinal = ((current.ordinal() + offset) + AEColor.values().length) % AEColor.values().length;
+            AEColor next = AEColor.values()[nextOrdinal];
+            setColor(stack, next);
+            return next;
+        } else {
+            return current;
+        }
+    }
+
+    @Override
+    public void onWheel(ItemStack is, boolean up) {
+        cycleColor(is, up ? -1 : 1);
     }
 
     public static void setColor(ItemStack stack, AEColor color) {
