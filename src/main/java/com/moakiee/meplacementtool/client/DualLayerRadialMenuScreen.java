@@ -116,7 +116,18 @@ public class DualLayerRadialMenuScreen extends Screen {
             if (!stack.isEmpty()) {
                 slots.add(new SlotData(i, stack, stack.getHoverName().getString()));
             } else if (fluidId != null && !fluidId.isEmpty()) {
-               // Fluid placeholder
+                var rl = net.minecraft.resources.ResourceLocation.tryParse(fluidId);
+                if (rl != null) {
+                    var fluid = net.minecraft.core.registries.BuiltInRegistries.FLUID.get(rl);
+                    if (fluid != null && fluid != net.minecraft.world.level.material.Fluids.EMPTY) {
+                        var aeFluidKey = appeng.api.stacks.AEFluidKey.of(fluid);
+                        var genericStack = new appeng.api.stacks.GenericStack(
+                                aeFluidKey, appeng.api.stacks.AEFluidKey.AMOUNT_BLOCK);
+                        ItemStack displayStack = appeng.api.stacks.GenericStack.wrapInItemStack(genericStack);
+                        slots.add(new SlotData(i, displayStack,
+                                aeFluidKey.getDisplayName().getString()));
+                    }
+                }
             }
         }
     }
