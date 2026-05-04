@@ -7,6 +7,7 @@ import net.minecraft.client.renderer.LevelRenderer;
 import net.minecraft.client.renderer.MultiBufferSource;
 import net.minecraft.client.renderer.RenderType;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.world.entity.Entity;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -16,6 +17,7 @@ import net.minecraft.world.phys.HitResult;
 import net.minecraftforge.client.event.RenderHighlightEvent;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import com.moakiee.meplacementtool.ItemMultiblockPlacementTool;
+import com.moakiee.meplacementtool.ItemMultiblockPlacementTool.DirectionMode;
 import com.moakiee.meplacementtool.MEPlacementToolMod;
 
 import java.util.ArrayList;
@@ -29,6 +31,7 @@ public class MultiblockPreviewRenderer
     private ItemStack lastWand;
     private Set<BlockPos> cachedPositions;
     private int lastPlacementCount;
+    private DirectionMode lastDirectionMode;
 
     @SubscribeEvent
     public void renderBlockHighlight(RenderHighlightEvent.Block event) {
@@ -42,14 +45,19 @@ public class MultiblockPreviewRenderer
         if(wand.isEmpty() || wand.getItem() != MEPlacementToolMod.MULTIBLOCK_PLACEMENT_TOOL.get()) return;
 
         int placementCount = ItemMultiblockPlacementTool.getPlacementCount(wand);
+        DirectionMode directionMode = ItemMultiblockPlacementTool.getDirectionMode(wand);
 
         Set<BlockPos> blocks;
-        if(cachedPositions == null || !compareRTR(lastRayTraceResult, rtr) || !lastWand.equals(wand) || lastPlacementCount != placementCount) {
-            blocks = calculatePlacementPositions(player, rtr, wand, placementCount);
+        if(cachedPositions == null || !compareRTR(lastRayTraceResult, rtr)
+                || !ItemStack.matches(lastWand, wand)
+                || lastPlacementCount != placementCount
+                || lastDirectionMode != directionMode) {
+            blocks = calculatePlacementPositions(player, rtr, wand, placementCount, directionMode);
             cachedPositions = blocks;
             lastRayTraceResult = rtr;
             lastWand = wand.copy();
             lastPlacementCount = placementCount;
+            lastDirectionMode = directionMode;
         } else {
             blocks = cachedPositions;
         }
@@ -74,7 +82,8 @@ public class MultiblockPreviewRenderer
         event.setCanceled(true);
     }
 
-    private Set<BlockPos> calculatePlacementPositions(Player player, BlockHitResult rtr, ItemStack wand, int placementCount) {
+    private Set<BlockPos> calculatePlacementPositions(Player player, BlockHitResult rtr, ItemStack wand,
+            int placementCount, DirectionMode directionMode) {
         Set<BlockPos> placePositions = new HashSet<>();
         if(placementCount <= 0) return placePositions;
 
@@ -86,6 +95,7 @@ public class MultiblockPreviewRenderer
         LinkedList<BlockPos> candidates = new LinkedList<>();
         Set<BlockPos> allCandidates = new HashSet<>();
         ArrayList<BlockPos> positions = new ArrayList<>();
+        Set<BlockPos> acceptedPositions = new HashSet<>();
 
         BlockPos startingPoint = clickedPos.relative(clickedFace);
         candidates.add(startingPoint);
@@ -102,63 +112,109 @@ public class MultiblockPreviewRenderer
             BlockPos supportingPoint = currentCandidate.relative(clickedFace.getOpposite());
             var supportingState = level.getBlockState(supportingPoint);
 
-            if(supportingState.getBlock() == clickedState.getBlock()) {
-                var currentState = level.getBlockState(currentCandidate);
-                boolean canPlace = level.isEmptyBlock(currentCandidate);
-                if(!canPlace) {
-                    try {
-                        var checkContext = new net.minecraft.world.item.context.BlockPlaceContext(new net.minecraft.world.item.context.UseOnContext(
-                            player, player.getUsedItemHand(), new net.minecraft.world.phys.BlockHitResult(
-                                rtr.getLocation(), rtr.getDirection(), currentCandidate, rtr.isInside()
-                            )
-                        ));
-                        canPlace = currentState.canBeReplaced(checkContext);
-                    } catch(Throwable t) {}
-                }
-                if(canPlace) {
-                    positions.add(currentCandidate);
-                    // Only expand candidates after successful placement (matches ConstructionWand behavior)
-                    switch(clickedFace) {
-                        case DOWN:
-                        case UP:
-                            candidates.add(currentCandidate.north());
-                            candidates.add(currentCandidate.south());
-                            candidates.add(currentCandidate.east());
-                            candidates.add(currentCandidate.west());
-                            candidates.add(currentCandidate.north().east());
-                            candidates.add(currentCandidate.north().west());
-                            candidates.add(currentCandidate.south().east());
-                            candidates.add(currentCandidate.south().west());
-                            break;
-                        case NORTH:
-                        case SOUTH:
-                            candidates.add(currentCandidate.above());
-                            candidates.add(currentCandidate.below());
-                            candidates.add(currentCandidate.east());
-                            candidates.add(currentCandidate.west());
-                            candidates.add(currentCandidate.above().east());
-                            candidates.add(currentCandidate.above().west());
-                            candidates.add(currentCandidate.below().east());
-                            candidates.add(currentCandidate.below().west());
-                            break;
-                        case EAST:
-                        case WEST:
-                            candidates.add(currentCandidate.above());
-                            candidates.add(currentCandidate.below());
-                            candidates.add(currentCandidate.north());
-                            candidates.add(currentCandidate.south());
-                            candidates.add(currentCandidate.above().north());
-                            candidates.add(currentCandidate.above().south());
-                            candidates.add(currentCandidate.below().north());
-                            candidates.add(currentCandidate.below().south());
-                            break;
-                    }
-                }
+            boolean supportMatches = supportingState.getBlock() == clickedState.getBlock();
+            if(!supportMatches && directionMode != DirectionMode.AUTO
+                    && !hasLockedModeSupport(currentCandidate, acceptedPositions, directionMode)) {
+                continue;
+            }
+
+            var currentState = level.getBlockState(currentCandidate);
+            boolean canPlace = level.isEmptyBlock(currentCandidate);
+            if(!canPlace) {
+                try {
+                    var checkContext = new net.minecraft.world.item.context.BlockPlaceContext(new net.minecraft.world.item.context.UseOnContext(
+                        player, player.getUsedItemHand(), new net.minecraft.world.phys.BlockHitResult(
+                            rtr.getLocation(), rtr.getDirection(), currentCandidate, rtr.isInside()
+                        )
+                    ));
+                    canPlace = currentState.canBeReplaced(checkContext);
+                } catch(Throwable t) {}
+            }
+            if(canPlace) {
+                positions.add(currentCandidate);
+                acceptedPositions.add(currentCandidate);
+                // Only expand candidates after successful placement (matches ConstructionWand behavior)
+                addAdjacentPositions(candidates, currentCandidate, clickedFace, directionMode);
             }
         }
 
         placePositions.addAll(positions);
         return placePositions;
+    }
+
+    private boolean hasLockedModeSupport(BlockPos candidate, Set<BlockPos> acceptedPositions,
+            DirectionMode directionMode) {
+        switch (directionMode) {
+            case NORTH_SOUTH:
+                return acceptedPositions.contains(candidate.north()) || acceptedPositions.contains(candidate.south());
+            case EAST_WEST:
+                return acceptedPositions.contains(candidate.east()) || acceptedPositions.contains(candidate.west());
+            case VERTICAL:
+                return acceptedPositions.contains(candidate.above()) || acceptedPositions.contains(candidate.below());
+            case AUTO:
+            default:
+                return false;
+        }
+    }
+
+    private void addAdjacentPositions(LinkedList<BlockPos> candidates, BlockPos pos, Direction face,
+            DirectionMode directionMode) {
+        switch (directionMode) {
+            case NORTH_SOUTH:
+                candidates.add(pos.north());
+                candidates.add(pos.south());
+                break;
+            case EAST_WEST:
+                candidates.add(pos.east());
+                candidates.add(pos.west());
+                break;
+            case VERTICAL:
+                candidates.add(pos.above());
+                candidates.add(pos.below());
+                break;
+            case AUTO:
+            default:
+                addAutoAdjacentPositions(candidates, pos, face);
+                break;
+        }
+    }
+
+    private void addAutoAdjacentPositions(LinkedList<BlockPos> candidates, BlockPos pos, Direction face) {
+        switch (face) {
+            case DOWN:
+            case UP:
+                candidates.add(pos.north());
+                candidates.add(pos.south());
+                candidates.add(pos.east());
+                candidates.add(pos.west());
+                candidates.add(pos.north().east());
+                candidates.add(pos.north().west());
+                candidates.add(pos.south().east());
+                candidates.add(pos.south().west());
+                break;
+            case NORTH:
+            case SOUTH:
+                candidates.add(pos.above());
+                candidates.add(pos.below());
+                candidates.add(pos.east());
+                candidates.add(pos.west());
+                candidates.add(pos.above().east());
+                candidates.add(pos.above().west());
+                candidates.add(pos.below().east());
+                candidates.add(pos.below().west());
+                break;
+            case EAST:
+            case WEST:
+                candidates.add(pos.above());
+                candidates.add(pos.below());
+                candidates.add(pos.north());
+                candidates.add(pos.south());
+                candidates.add(pos.above().north());
+                candidates.add(pos.above().south());
+                candidates.add(pos.below().north());
+                candidates.add(pos.below().south());
+                break;
+        }
     }
 
     private static boolean compareRTR(BlockHitResult rtr1, BlockHitResult rtr2) {
@@ -171,5 +227,6 @@ public class MultiblockPreviewRenderer
         lastRayTraceResult = null;
         lastWand = null;
         lastPlacementCount = 0;
+        lastDirectionMode = null;
     }
 }

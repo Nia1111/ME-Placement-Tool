@@ -213,6 +213,19 @@ public class WandMenu extends AEBaseMenu {
                     ftag.putString(Integer.toString(e.getKey()), e.getValue());
                 }
                 combined.put("fluids", ftag);
+
+                // Preserve selection metadata while rewriting item/fluid config.
+                CompoundTag existing = main.getOrCreateTag();
+                if (existing.contains(TAG_KEY)) {
+                    CompoundTag prev = existing.getCompound(TAG_KEY);
+                    if (prev.contains("SelectedSlot")) {
+                        combined.putInt("SelectedSlot", prev.getInt("SelectedSlot"));
+                    }
+                    if (prev.contains("DirectionMode")) {
+                        combined.putInt("DirectionMode", prev.getInt("DirectionMode"));
+                    }
+                }
+
                 main.getOrCreateTag().put(TAG_KEY, combined);
             }
         } else {
@@ -233,6 +246,9 @@ public class WandMenu extends AEBaseMenu {
                         CompoundTag prev = existing.getCompound(TAG_KEY);
                         if (prev.contains("SelectedSlot")) {
                             combined.putInt("SelectedSlot", prev.getInt("SelectedSlot"));
+                        }
+                        if (prev.contains("DirectionMode")) {
+                            combined.putInt("DirectionMode", prev.getInt("DirectionMode"));
                         }
                     }
                 }

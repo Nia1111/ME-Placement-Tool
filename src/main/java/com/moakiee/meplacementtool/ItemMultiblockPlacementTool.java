@@ -48,6 +48,29 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
     private static final int[] PLACEMENT_COUNTS = {1, 8, 64, 256, 1024};
     private static final String TAG_PLACEMENT_COUNT = "placement_count";
 
+    /**
+     * Placement direction modes for bulk placement.
+     * AUTO uses BFS across the face plane.
+     */
+    public enum DirectionMode {
+        AUTO,
+        NORTH_SOUTH,
+        EAST_WEST,
+        VERTICAL;
+
+        public static DirectionMode fromId(int id) {
+            DirectionMode[] values = values();
+            if (id < 0 || id >= values.length) {
+                return AUTO;
+            }
+            return values[id];
+        }
+
+        public String translationKey() {
+            return "meplacementtool.direction." + name().toLowerCase(java.util.Locale.ROOT);
+        }
+    }
+
     public ItemMultiblockPlacementTool(Item.Properties props) {
         super(() -> Config.multiblockPlacementToolEnergyCapacity, props);
     }
@@ -74,6 +97,17 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
             }
         }
         return PLACEMENT_COUNTS[0];
+    }
+
+    public static DirectionMode getDirectionMode(ItemStack stack) {
+        CompoundTag data = stack.getTag();
+        if (data != null && data.contains(WandMenu.TAG_KEY)) {
+            CompoundTag cfg = data.getCompound(WandMenu.TAG_KEY);
+            if (cfg.contains("DirectionMode")) {
+                return DirectionMode.fromId(cfg.getInt("DirectionMode"));
+            }
+        }
+        return DirectionMode.AUTO;
     }
 
     @Override
@@ -168,6 +202,11 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
             return InteractionResult.FAIL;
         }
 
+        DirectionMode directionMode = DirectionMode.AUTO;
+        if (cfg != null && cfg.contains("DirectionMode")) {
+            directionMode = DirectionMode.fromId(cfg.getInt("DirectionMode"));
+        }
+
         var storage = grid.getStorageService().getInventory();
         var src = new appeng.me.helpers.PlayerSource(player);
 
@@ -195,6 +234,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                 java.util.LinkedList<BlockPos> candidates = new java.util.LinkedList<>();
                 java.util.HashSet<BlockPos> allCandidates = new java.util.HashSet<>();
                 java.util.ArrayList<BlockPos> placePositions = new java.util.ArrayList<>();
+                java.util.HashSet<BlockPos> acceptedCandidates = new java.util.HashSet<>();
 
                 BlockPos startingPoint = clickedPos.relative(clickedFace);
                 candidates.add(startingPoint);
@@ -211,63 +251,33 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                     BlockPos supportingPoint = currentCandidate.relative(clickedFace.getOpposite());
                     var supportingState = level.getBlockState(supportingPoint);
 
-                    // Check if the supporting block matches the clicked block (same as block placement logic)
-                    if (supportingState.getBlock() == clickedState.getBlock()) {
-                        var stateAtPos = level.getBlockState(currentCandidate);
-                        boolean stateIsLegacy = stateAtPos == legacyBlock;
-                        boolean stateIsAir = stateAtPos.isAir();
-                        boolean canBeReplaced = false;
-                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Throwable ignored2) {}
-                        boolean isLiquidContainer = stateAtPos.getBlock() instanceof net.minecraft.world.level.block.LiquidBlockContainer;
-                        boolean containerCanPlace = false;
-                        if (isLiquidContainer) {
-                            try {
-                                containerCanPlace = ((net.minecraft.world.level.block.LiquidBlockContainer) stateAtPos.getBlock())
-                                        .canPlaceLiquid(level, currentCandidate, stateAtPos, fluid);
-                            } catch (Throwable ignored2) {}
-                        }
+                    boolean supportMatches = supportingState.getBlock() == clickedState.getBlock();
+                    if (!supportMatches && directionMode != DirectionMode.AUTO
+                            && !hasLockedModeSupport(currentCandidate, acceptedCandidates, directionMode)) {
+                        continue;
+                    }
 
-                        boolean canPlace = !stateIsLegacy && !aeFluidKey.hasTag() && (stateIsAir || canBeReplaced || (isLiquidContainer && containerCanPlace));
+                    var stateAtPos = level.getBlockState(currentCandidate);
+                    boolean stateIsLegacy = stateAtPos == legacyBlock;
+                    boolean stateIsAir = stateAtPos.isAir();
+                    boolean canBeReplaced = false;
+                    try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Throwable ignored2) {}
+                    boolean isLiquidContainer = stateAtPos.getBlock() instanceof net.minecraft.world.level.block.LiquidBlockContainer;
+                    boolean containerCanPlace = false;
+                    if (isLiquidContainer) {
+                        try {
+                            containerCanPlace = ((net.minecraft.world.level.block.LiquidBlockContainer) stateAtPos.getBlock())
+                                    .canPlaceLiquid(level, currentCandidate, stateAtPos, fluid);
+                        } catch (Throwable ignored2) {}
+                    }
 
-                        if (canPlace) {
-                            placePositions.add(currentCandidate);
-                            // Only expand candidates after successful placement (matches ConstructionWand behavior)
-                            switch (clickedFace) {
-                                case DOWN:
-                                case UP:
-                                    candidates.add(currentCandidate.north());
-                                    candidates.add(currentCandidate.south());
-                                    candidates.add(currentCandidate.east());
-                                    candidates.add(currentCandidate.west());
-                                    candidates.add(currentCandidate.north().east());
-                                    candidates.add(currentCandidate.north().west());
-                                    candidates.add(currentCandidate.south().east());
-                                    candidates.add(currentCandidate.south().west());
-                                    break;
-                                case NORTH:
-                                case SOUTH:
-                                    candidates.add(currentCandidate.east());
-                                    candidates.add(currentCandidate.west());
-                                    candidates.add(currentCandidate.above());
-                                    candidates.add(currentCandidate.below());
-                                    candidates.add(currentCandidate.above().east());
-                                    candidates.add(currentCandidate.above().west());
-                                    candidates.add(currentCandidate.below().east());
-                                    candidates.add(currentCandidate.below().west());
-                                    break;
-                                case EAST:
-                                case WEST:
-                                    candidates.add(currentCandidate.north());
-                                    candidates.add(currentCandidate.south());
-                                    candidates.add(currentCandidate.above());
-                                    candidates.add(currentCandidate.below());
-                                    candidates.add(currentCandidate.above().north());
-                                    candidates.add(currentCandidate.above().south());
-                                    candidates.add(currentCandidate.below().north());
-                                    candidates.add(currentCandidate.below().south());
-                                    break;
-                            }
-                        }
+                    boolean canPlace = !stateIsLegacy && !aeFluidKey.hasTag() && (stateIsAir || canBeReplaced || (isLiquidContainer && containerCanPlace));
+
+                    if (canPlace) {
+                        placePositions.add(currentCandidate);
+                        acceptedCandidates.add(currentCandidate);
+                        // Only expand candidates after successful placement (matches ConstructionWand behavior)
+                        addAdjacentPositions(candidates, currentCandidate, clickedFace, directionMode);
                     }
                 }
                 if (placePositions.isEmpty()) {
@@ -361,6 +371,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                 java.util.LinkedList<BlockPos> candidates = new java.util.LinkedList<>();
                 java.util.HashSet<BlockPos> allCandidates = new java.util.HashSet<>();
                 java.util.ArrayList<BlockPos> placePositions = new java.util.ArrayList<>();
+                java.util.HashSet<BlockPos> acceptedCandidates = new java.util.HashSet<>();
 
                 BlockPos startingPoint = clickedPos.relative(clickedFace);
                 candidates.add(startingPoint);
@@ -377,63 +388,33 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                     BlockPos supportingPoint = currentCandidate.relative(clickedFace.getOpposite());
                     var supportingState = level.getBlockState(supportingPoint);
 
-                    // Check if the supporting block matches the clicked block (same as block placement logic)
-                    if (supportingState.getBlock() == clickedState.getBlock()) {
-                        var stateAtPos = level.getBlockState(currentCandidate);
-                        boolean stateIsLegacy = stateAtPos == legacyBlock;
-                        boolean stateIsAir = stateAtPos.isAir();
-                        boolean canBeReplaced = false;
-                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Throwable ignored2) {}
-                        boolean isLiquidContainer = stateAtPos.getBlock() instanceof net.minecraft.world.level.block.LiquidBlockContainer;
-                        boolean containerCanPlace = false;
-                        if (isLiquidContainer) {
-                            try {
-                                containerCanPlace = ((net.minecraft.world.level.block.LiquidBlockContainer) stateAtPos.getBlock())
-                                        .canPlaceLiquid(level, currentCandidate, stateAtPos, fluid);
-                            } catch (Throwable ignored2) {}
-                        }
+                    boolean supportMatches = supportingState.getBlock() == clickedState.getBlock();
+                    if (!supportMatches && directionMode != DirectionMode.AUTO
+                            && !hasLockedModeSupport(currentCandidate, acceptedCandidates, directionMode)) {
+                        continue;
+                    }
 
-                        boolean canPlace = !stateIsLegacy && !aeFluidKey.hasTag() && (stateIsAir || canBeReplaced || (isLiquidContainer && containerCanPlace));
+                    var stateAtPos = level.getBlockState(currentCandidate);
+                    boolean stateIsLegacy = stateAtPos == legacyBlock;
+                    boolean stateIsAir = stateAtPos.isAir();
+                    boolean canBeReplaced = false;
+                    try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Throwable ignored2) {}
+                    boolean isLiquidContainer = stateAtPos.getBlock() instanceof net.minecraft.world.level.block.LiquidBlockContainer;
+                    boolean containerCanPlace = false;
+                    if (isLiquidContainer) {
+                        try {
+                            containerCanPlace = ((net.minecraft.world.level.block.LiquidBlockContainer) stateAtPos.getBlock())
+                                    .canPlaceLiquid(level, currentCandidate, stateAtPos, fluid);
+                        } catch (Throwable ignored2) {}
+                    }
 
-                        if (canPlace) {
-                            placePositions.add(currentCandidate);
-                            // Only expand candidates after successful placement (matches ConstructionWand behavior)
-                            switch (clickedFace) {
-                                case DOWN:
-                                case UP:
-                                    candidates.add(currentCandidate.north());
-                                    candidates.add(currentCandidate.south());
-                                    candidates.add(currentCandidate.east());
-                                    candidates.add(currentCandidate.west());
-                                    candidates.add(currentCandidate.north().east());
-                                    candidates.add(currentCandidate.north().west());
-                                    candidates.add(currentCandidate.south().east());
-                                    candidates.add(currentCandidate.south().west());
-                                    break;
-                                case NORTH:
-                                case SOUTH:
-                                    candidates.add(currentCandidate.east());
-                                    candidates.add(currentCandidate.west());
-                                    candidates.add(currentCandidate.above());
-                                    candidates.add(currentCandidate.below());
-                                    candidates.add(currentCandidate.above().east());
-                                    candidates.add(currentCandidate.above().west());
-                                    candidates.add(currentCandidate.below().east());
-                                    candidates.add(currentCandidate.below().west());
-                                    break;
-                                case EAST:
-                                case WEST:
-                                    candidates.add(currentCandidate.north());
-                                    candidates.add(currentCandidate.south());
-                                    candidates.add(currentCandidate.above());
-                                    candidates.add(currentCandidate.below());
-                                    candidates.add(currentCandidate.above().north());
-                                    candidates.add(currentCandidate.above().south());
-                                    candidates.add(currentCandidate.below().north());
-                                    candidates.add(currentCandidate.below().south());
-                                    break;
-                            }
-                        }
+                    boolean canPlace = !stateIsLegacy && !aeFluidKey.hasTag() && (stateIsAir || canBeReplaced || (isLiquidContainer && containerCanPlace));
+
+                    if (canPlace) {
+                        placePositions.add(currentCandidate);
+                        acceptedCandidates.add(currentCandidate);
+                        // Only expand candidates after successful placement (matches ConstructionWand behavior)
+                        addAdjacentPositions(candidates, currentCandidate, clickedFace, directionMode);
                     }
                 }
                 if (placePositions.isEmpty()) {
@@ -542,6 +523,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
         java.util.LinkedList<BlockPos> candidates = new java.util.LinkedList<>();
         java.util.HashSet<BlockPos> allCandidates = new java.util.HashSet<>();
         java.util.ArrayList<BlockPos> placePositions = new java.util.ArrayList<>();
+        java.util.HashSet<BlockPos> acceptedCandidates = new java.util.HashSet<>();
 
         BlockPos startingPoint = clickedPos.relative(clickedFace);
         candidates.add(startingPoint);
@@ -558,58 +540,29 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
             BlockPos supportingPoint = currentCandidate.relative(clickedFace.getOpposite());
             var supportingState = level.getBlockState(supportingPoint);
 
-            if (supportingState.getBlock() == clickedState.getBlock()) {
-                var currentState = level.getBlockState(currentCandidate);
-                boolean canPlace = level.isEmptyBlock(currentCandidate);
-                if (!canPlace) {
-                    try {
-                        BlockPlaceContext checkContext = new BlockPlaceContext(new net.minecraft.world.item.context.UseOnContext(
-                            player, context.getHand(), new net.minecraft.world.phys.BlockHitResult(
-                                context.getClickLocation(), context.getClickedFace(), currentCandidate, context.isInside()
-                            )
-                        ));
-                        canPlace = currentState.canBeReplaced(checkContext);
-                    } catch (Throwable t) {}
-                }
-                if (canPlace) {
-                    placePositions.add(currentCandidate);
-                    // Only expand candidates after successful placement (matches ConstructionWand behavior)
-                    switch (clickedFace) {
-                        case DOWN:
-                        case UP:
-                            candidates.add(currentCandidate.north());
-                            candidates.add(currentCandidate.south());
-                            candidates.add(currentCandidate.east());
-                            candidates.add(currentCandidate.west());
-                            candidates.add(currentCandidate.north().east());
-                            candidates.add(currentCandidate.north().west());
-                            candidates.add(currentCandidate.south().east());
-                            candidates.add(currentCandidate.south().west());
-                            break;
-                        case NORTH:
-                        case SOUTH:
-                            candidates.add(currentCandidate.east());
-                            candidates.add(currentCandidate.west());
-                            candidates.add(currentCandidate.above());
-                            candidates.add(currentCandidate.below());
-                            candidates.add(currentCandidate.above().east());
-                            candidates.add(currentCandidate.above().west());
-                            candidates.add(currentCandidate.below().east());
-                            candidates.add(currentCandidate.below().west());
-                            break;
-                        case EAST:
-                        case WEST:
-                            candidates.add(currentCandidate.north());
-                            candidates.add(currentCandidate.south());
-                            candidates.add(currentCandidate.above());
-                            candidates.add(currentCandidate.below());
-                            candidates.add(currentCandidate.above().north());
-                            candidates.add(currentCandidate.above().south());
-                            candidates.add(currentCandidate.below().north());
-                            candidates.add(currentCandidate.below().south());
-                            break;
-                    }
-                }
+            boolean supportMatches = supportingState.getBlock() == clickedState.getBlock();
+            if (!supportMatches && directionMode != DirectionMode.AUTO
+                    && !hasLockedModeSupport(currentCandidate, acceptedCandidates, directionMode)) {
+                continue;
+            }
+
+            var currentState = level.getBlockState(currentCandidate);
+            boolean canPlace = level.isEmptyBlock(currentCandidate);
+            if (!canPlace) {
+                try {
+                    BlockPlaceContext checkContext = new BlockPlaceContext(new net.minecraft.world.item.context.UseOnContext(
+                        player, context.getHand(), new net.minecraft.world.phys.BlockHitResult(
+                            context.getClickLocation(), context.getClickedFace(), currentCandidate, context.isInside()
+                        )
+                    ));
+                    canPlace = currentState.canBeReplaced(checkContext);
+                } catch (Throwable t) {}
+            }
+            if (canPlace) {
+                placePositions.add(currentCandidate);
+                acceptedCandidates.add(currentCandidate);
+                // Only expand candidates after successful placement (matches ConstructionWand behavior)
+                addAdjacentPositions(candidates, currentCandidate, clickedFace, directionMode);
             }
         }
 
@@ -744,6 +697,82 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
         }
 
         return InteractionResult.sidedSuccess(false);
+    }
+
+    private void addAdjacentPositions(java.util.LinkedList<BlockPos> candidates, BlockPos pos,
+            net.minecraft.core.Direction face, DirectionMode directionMode) {
+        switch (directionMode) {
+            case NORTH_SOUTH:
+                candidates.add(pos.north());
+                candidates.add(pos.south());
+                break;
+            case EAST_WEST:
+                candidates.add(pos.east());
+                candidates.add(pos.west());
+                break;
+            case VERTICAL:
+                candidates.add(pos.above());
+                candidates.add(pos.below());
+                break;
+            case AUTO:
+            default:
+                addAutoAdjacentPositions(candidates, pos, face);
+                break;
+        }
+    }
+
+    private boolean hasLockedModeSupport(BlockPos candidate, java.util.Set<BlockPos> acceptedCandidates,
+            DirectionMode directionMode) {
+        switch (directionMode) {
+            case NORTH_SOUTH:
+                return acceptedCandidates.contains(candidate.north()) || acceptedCandidates.contains(candidate.south());
+            case EAST_WEST:
+                return acceptedCandidates.contains(candidate.east()) || acceptedCandidates.contains(candidate.west());
+            case VERTICAL:
+                return acceptedCandidates.contains(candidate.above()) || acceptedCandidates.contains(candidate.below());
+            case AUTO:
+            default:
+                return false;
+        }
+    }
+
+    private void addAutoAdjacentPositions(java.util.LinkedList<BlockPos> candidates, BlockPos pos,
+            net.minecraft.core.Direction face) {
+        switch (face) {
+            case DOWN:
+            case UP:
+                candidates.add(pos.north());
+                candidates.add(pos.south());
+                candidates.add(pos.east());
+                candidates.add(pos.west());
+                candidates.add(pos.north().east());
+                candidates.add(pos.north().west());
+                candidates.add(pos.south().east());
+                candidates.add(pos.south().west());
+                break;
+            case NORTH:
+            case SOUTH:
+                candidates.add(pos.east());
+                candidates.add(pos.west());
+                candidates.add(pos.above());
+                candidates.add(pos.below());
+                candidates.add(pos.above().east());
+                candidates.add(pos.above().west());
+                candidates.add(pos.below().east());
+                candidates.add(pos.below().west());
+                break;
+            case EAST:
+            case WEST:
+                candidates.add(pos.north());
+                candidates.add(pos.south());
+                candidates.add(pos.above());
+                candidates.add(pos.below());
+                candidates.add(pos.above().north());
+                candidates.add(pos.above().south());
+                candidates.add(pos.below().north());
+                candidates.add(pos.below().south());
+                break;
+        }
     }
 
     @Override
