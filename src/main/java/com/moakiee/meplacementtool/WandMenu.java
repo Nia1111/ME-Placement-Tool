@@ -233,6 +233,9 @@ public class WandMenu extends AbstractContainerMenu {
             if (existing.contains("PlacementCount")) {
                 combined.putInt("PlacementCount", existing.getInt("PlacementCount"));
             }
+            if (existing.contains("DirectionMode")) {
+                combined.putInt("DirectionMode", existing.getInt("DirectionMode"));
+            }
         }
 
         if (!player.level().isClientSide) {
@@ -270,6 +273,9 @@ public class WandMenu extends AbstractContainerMenu {
                 }
                 if (existing.contains("PlacementCount")) {
                     combined.putInt("PlacementCount", existing.getInt("PlacementCount"));
+                }
+                if (existing.contains("DirectionMode")) {
+                    combined.putInt("DirectionMode", existing.getInt("DirectionMode"));
                 }
             }
 

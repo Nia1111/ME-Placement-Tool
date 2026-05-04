@@ -74,6 +74,9 @@ public record UpdateWandSlotPayload(int slotIndex, ItemStack stack) implements C
         if (existingConfig.contains("PlacementCount")) {
             newConfig.putInt("PlacementCount", existingConfig.getInt("PlacementCount"));
         }
+        if (existingConfig.contains("DirectionMode")) {
+            newConfig.putInt("DirectionMode", existingConfig.getInt("DirectionMode"));
+        }
 
         wandStack.set(ModDataComponents.PLACEMENT_CONFIG.get(), newConfig);
     }
