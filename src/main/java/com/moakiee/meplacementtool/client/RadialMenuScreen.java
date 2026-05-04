@@ -14,6 +14,7 @@ import net.minecraft.world.item.ItemStack;
 import net.neoforged.neoforge.items.ItemStackHandler;
 import net.neoforged.neoforge.network.PacketDistributor;
 
+import com.moakiee.meplacementtool.ItemMEPlacementTool;
 import com.moakiee.meplacementtool.MEPlacementToolMod;
 import com.moakiee.meplacementtool.ModDataComponents;
 import com.moakiee.meplacementtool.WandMenu;
@@ -47,7 +48,10 @@ public class RadialMenuScreen extends Screen {
     public RadialMenuScreen() {
         super(Component.literal(""));
         this.minecraft = Minecraft.getInstance();
-        this.wandStack = minecraft.player != null ? minecraft.player.getMainHandItem() : ItemStack.EMPTY;
+        // Look up the wand from main hand first, off hand second, so the radial menu works in either hand.
+        this.wandStack = minecraft.player != null
+                ? com.moakiee.meplacementtool.BasePlacementToolItem.findHeldTool(minecraft.player, ItemMEPlacementTool.class)
+                : ItemStack.EMPTY;
         loadSlots();
         loadCurrentSelection();
     }

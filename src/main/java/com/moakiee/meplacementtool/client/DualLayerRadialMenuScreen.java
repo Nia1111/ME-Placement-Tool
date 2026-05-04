@@ -14,6 +14,7 @@ import net.minecraft.world.item.ItemStack;
 import net.neoforged.neoforge.items.ItemStackHandler;
 import net.neoforged.neoforge.network.PacketDistributor;
 
+import com.moakiee.meplacementtool.ItemMultiblockPlacementTool;
 import com.moakiee.meplacementtool.ItemMultiblockPlacementTool.DirectionMode;
 import com.moakiee.meplacementtool.MEPlacementToolMod;
 import com.moakiee.meplacementtool.ModDataComponents;
@@ -63,7 +64,9 @@ public class DualLayerRadialMenuScreen extends Screen {
     public DualLayerRadialMenuScreen() {
         super(Component.literal(""));
         this.minecraft = Minecraft.getInstance();
-        this.wandStack = minecraft.player.getMainHandItem();
+        // Look up the wand from main hand first, off hand second, so the radial menu works in either hand.
+        this.wandStack = com.moakiee.meplacementtool.BasePlacementToolItem
+                .findHeldTool(minecraft.player, ItemMultiblockPlacementTool.class);
         loadSlots();
         loadCurrentConfig();
     }
@@ -182,8 +185,16 @@ public class DualLayerRadialMenuScreen extends Screen {
         if (wandStack.isEmpty()) return;
 
         currentPlacementCount = count;
+
+        // Write to the client-side stack immediately so the preview reflects it this frame
+        CompoundTag cfg = wandStack.get(ModDataComponents.PLACEMENT_CONFIG.get());
+        cfg = (cfg == null) ? new CompoundTag() : cfg.copy();
+        cfg.putInt("PlacementCount", count);
+        wandStack.set(ModDataComponents.PLACEMENT_CONFIG.get(), cfg);
+
         PacketDistributor.sendToServer(new UpdatePlacementCountPayload(count));
-        MEPlacementToolMod.ClientForgeEvents.showCountOverlay("Placement Count: " + count);
+        MEPlacementToolMod.ClientForgeEvents.showCountOverlay(
+                Component.translatable("meplacementtool.hud.placement_count", count).getString());
     }
 
     private void selectDirection(DirectionMode mode) {

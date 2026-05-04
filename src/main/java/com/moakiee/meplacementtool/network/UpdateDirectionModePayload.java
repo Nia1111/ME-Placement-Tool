@@ -36,13 +36,15 @@ public record UpdateDirectionModePayload(int modeId) implements CustomPacketPayl
         context.enqueueWork(() -> {
             if (!(context.player() instanceof ServerPlayer player)) return;
 
-            ItemStack main = player.getMainHandItem();
-            if (main.isEmpty() || !(main.getItem() instanceof ItemMultiblockPlacementTool)) return;
+            // Find the multiblock tool in either hand (main first, off second).
+            ItemStack stack = com.moakiee.meplacementtool.BasePlacementToolItem
+                    .findHeldTool(player, ItemMultiblockPlacementTool.class);
+            if (stack.isEmpty()) return;
 
-            CompoundTag cfg = main.get(ModDataComponents.PLACEMENT_CONFIG.get());
+            CompoundTag cfg = stack.get(ModDataComponents.PLACEMENT_CONFIG.get());
             cfg = (cfg == null) ? new CompoundTag() : cfg.copy();
             cfg.putInt("DirectionMode", ItemMultiblockPlacementTool.DirectionMode.fromId(payload.modeId()).ordinal());
-            main.set(ModDataComponents.PLACEMENT_CONFIG.get(), cfg);
+            stack.set(ModDataComponents.PLACEMENT_CONFIG.get(), cfg);
         });
     }
 }

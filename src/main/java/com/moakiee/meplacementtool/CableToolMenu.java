@@ -264,7 +264,10 @@ public class CableToolMenu extends AEBaseMenu {
 
     @Override
     public boolean stillValid(Player player) {
-        return player.getMainHandItem() == this.toolStack || player.getOffhandItem() == this.toolStack;
+        // Match by item type rather than stack reference equality so the menu survives the
+        // ItemStack instance being replaced by a data-component sync (hand swap, recipe adjust, etc.).
+        return player.getMainHandItem().getItem() instanceof ItemMECablePlacementTool
+                || player.getOffhandItem().getItem() instanceof ItemMECablePlacementTool;
     }
 
     /**

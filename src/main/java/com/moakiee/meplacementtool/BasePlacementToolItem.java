@@ -40,6 +40,21 @@ public abstract class BasePlacementToolItem extends AEBasePoweredItem {
     public BasePlacementToolItem(DoubleSupplier powerCapacity, Item.Properties props) {
         super(powerCapacity, props);
     }
+
+    /**
+     * Find a held tool of the given class on the player.
+     * Prefers the main hand; falls back to off hand.
+     *
+     * @return the matching ItemStack, or {@link ItemStack#EMPTY} if neither hand holds an instance.
+     */
+    public static ItemStack findHeldTool(Player player, Class<?> toolClass) {
+        if (player == null) return ItemStack.EMPTY;
+        ItemStack main = player.getMainHandItem();
+        if (toolClass.isInstance(main.getItem())) return main;
+        ItemStack off = player.getOffhandItem();
+        if (toolClass.isInstance(off.getItem())) return off;
+        return ItemStack.EMPTY;
+    }
     
     @Override
     @OnlyIn(Dist.CLIENT)
