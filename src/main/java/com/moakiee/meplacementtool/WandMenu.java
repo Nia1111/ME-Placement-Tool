@@ -22,14 +22,18 @@ public class WandMenu extends AEBaseMenu {
     private final ItemStackHandler handler;
     private final List<GhostSlot> ghostSlots = new ArrayList<>();
     private final java.util.Map<Integer, String> fluidMap = new java.util.HashMap<>();
-    private static final ThreadLocal<CompoundTag> TEMP_TAG = new ThreadLocal<>();
     private int currentPage = 0;
 
+    private record BufResult(ItemStackHandler handler, CompoundTag config) {}
+
     public WandMenu(int id, Inventory playerInventory, FriendlyByteBuf buf) {
-        this(id, playerInventory, handlerFromBuf(buf));
-        CompoundTag cfg = TEMP_TAG.get();
-        if (cfg != null && cfg.contains("fluids")) {
-            var ftag = cfg.getCompound("fluids");
+        this(id, playerInventory, parseBuf(buf));
+    }
+
+    private WandMenu(int id, Inventory playerInventory, BufResult result) {
+        this(id, playerInventory, result.handler());
+        if (result.config() != null && result.config().contains("fluids")) {
+            var ftag = result.config().getCompound("fluids");
             for (String key : ftag.getAllKeys()) {
                 try {
                     int idx = Integer.parseInt(key);
@@ -37,16 +41,13 @@ public class WandMenu extends AEBaseMenu {
                 } catch (NumberFormatException ignored) {}
             }
         }
-        TEMP_TAG.remove();
     }
 
-    private static ItemStackHandler handlerFromBuf(FriendlyByteBuf buf) {
+    private static BufResult parseBuf(FriendlyByteBuf buf) {
         CompoundTag cfg = buf.readNbt();
-        TEMP_TAG.set(cfg);
         ItemStackHandler h = new ItemStackHandler(TOTAL_SLOTS);
         if (cfg != null) {
             CompoundTag itemsTag = cfg.contains("items") ? cfg.getCompound("items") : cfg;
-            // Manually copy items to preserve 18-slot size (old data may have only 9 slots)
             if (itemsTag.contains("Items")) {
                 net.minecraft.nbt.ListTag list = itemsTag.getList("Items", 10);
                 for (int i = 0; i < list.size(); i++) {
@@ -58,7 +59,7 @@ public class WandMenu extends AEBaseMenu {
                 }
             }
         }
-        return h;
+        return new BufResult(h, cfg);
     }
 
     public WandMenu(int id, Inventory playerInventory, ItemStackHandler handler) {
@@ -252,7 +253,7 @@ public class WandMenu extends AEBaseMenu {
                         }
                     }
                 }
-            } catch (Throwable ignored) {}
+            } catch (Exception ignored) {}
             com.moakiee.meplacementtool.network.ModNetwork.CHANNEL.sendToServer(
                     new com.moakiee.meplacementtool.network.UpdateWandConfigPacket(combined));
         }

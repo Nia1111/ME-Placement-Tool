@@ -16,10 +16,6 @@ import appeng.api.networking.crafting.ICraftingService;
 import appeng.api.parts.IPartItem;
 import appeng.api.parts.PartHelper;
 import appeng.api.stacks.AEKey;
-import appeng.api.storage.ISubMenuHost;
-import appeng.menu.MenuOpener;
-import appeng.menu.locator.MenuLocators;
-import appeng.menu.me.crafting.CraftAmountMenu;
 import appeng.menu.ISubMenu;
 import appeng.parts.PartPlacement;
 import net.minecraft.core.BlockPos;
@@ -42,7 +38,7 @@ import net.minecraft.world.level.Level;
 import net.minecraftforge.network.NetworkHooks;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
-import net.minecraftforge.items.ItemStackHandler;
+
 
 /**
  * ME Multiblock Placement Tool - extends BasePlacementToolItem to avoid being recognized as WirelessTerminalItem
@@ -122,36 +118,6 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
         });
     }
 
-    /**
-     * Open the crafting menu for an item that can be crafted.
-     * Uses the placement tool itself as the menu host, so we can control the close behavior.
-     * @param amount The amount to pre-fill in the crafting request
-     */
-    private void openCraftingMenu(ServerPlayer player, ItemStack wand, AEKey whatToCraft, int amount) {
-        // Find the slot containing the placement tool
-        int wandSlot = findInventorySlot(player, wand);
-        if (wandSlot >= 0) {
-            CraftAmountMenu.open(player, MenuLocators.forInventorySlot(wandSlot), whatToCraft, amount);
-        } else if (player.getMainHandItem() == wand) {
-            CraftAmountMenu.open(player, MenuLocators.forHand(player, net.minecraft.world.InteractionHand.MAIN_HAND), whatToCraft, amount);
-        } else if (player.getOffhandItem() == wand) {
-            CraftAmountMenu.open(player, MenuLocators.forHand(player, net.minecraft.world.InteractionHand.OFF_HAND), whatToCraft, amount);
-        }
-    }
-
-    /**
-     * Find the inventory slot containing the given item stack
-     */
-    private int findInventorySlot(Player player, ItemStack itemStack) {
-        var inv = player.getInventory();
-        for (int i = 0; i < inv.getContainerSize(); i++) {
-            if (inv.getItem(i) == itemStack) {
-                return i;
-            }
-        }
-        return -1;
-    }
-
     @Override
     public InteractionResult useOn(UseOnContext context) {
         Level level = context.getLevel();
@@ -179,26 +145,9 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
             return InteractionResult.FAIL;
         }
 
-        CompoundTag data = wand.getOrCreateTag();
-        CompoundTag cfg = null;
-        if (data.contains(WandMenu.TAG_KEY)) {
-            cfg = data.getCompound(WandMenu.TAG_KEY);
-        }
-
-        int selected = 0;
-        if (cfg != null && cfg.contains("SelectedSlot")) {
-            selected = cfg.getInt("SelectedSlot");
-            if (selected < 0 || selected >= 18) selected = 0;
-        }
-
-        var handler = new ItemStackHandler(18);
-        if (cfg != null) {
-            if (cfg.contains("items")) {
-                handler.deserializeNBT(cfg.getCompound("items"));
-            } else {
-                handler.deserializeNBT(cfg);
-            }
-        }
+        CompoundTag cfg = WandNbt.getConfig(wand);
+        int selected = WandNbt.getSelectedSlot(cfg);
+        var handler = WandNbt.readInventory(cfg);
 
         ItemStack target = handler.getStackInSlot(selected);
         if (target == null || target.isEmpty()) {
@@ -234,56 +183,29 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                 var clickedFace = context.getClickedFace();
                 var clickedState = level.getBlockState(clickedPos);
 
-                // Use BFS to find all positions where fluid can be placed (same logic as block placement)
-                java.util.LinkedList<BlockPos> candidates = new java.util.LinkedList<>();
-                java.util.HashSet<BlockPos> allCandidates = new java.util.HashSet<>();
-                java.util.ArrayList<BlockPos> placePositions = new java.util.ArrayList<>();
-                java.util.HashSet<BlockPos> acceptedCandidates = new java.util.HashSet<>();
-
-                BlockPos startingPoint = clickedPos.relative(clickedFace);
-                candidates.add(startingPoint);
-
-                // Limit max candidates explored to prevent infinite loop (performance fix)
-                final int MAX_CANDIDATES = placementCount * 10;
-
-                while (!candidates.isEmpty() && placePositions.size() < placementCount && allCandidates.size() < MAX_CANDIDATES) {
-                    BlockPos currentCandidate = candidates.removeFirst();
-                    if (!allCandidates.add(currentCandidate)) {
-                        continue;
+                var placePositions = PlacementBfs.findPositions(
+                    clickedPos.relative(clickedFace), placementCount, clickedFace, directionMode,
+                    candidate -> {
+                        BlockPos supportingPoint = candidate.relative(clickedFace.getOpposite());
+                        return level.getBlockState(supportingPoint).getBlock() == clickedState.getBlock();
+                    },
+                    candidate -> {
+                        var stateAtPos = level.getBlockState(candidate);
+                        boolean stateIsLegacy = stateAtPos == legacyBlock;
+                        boolean stateIsAir = stateAtPos.isAir();
+                        boolean canBeReplaced = false;
+                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Exception ignored) {}
+                        boolean isLiquidContainer = stateAtPos.getBlock() instanceof net.minecraft.world.level.block.LiquidBlockContainer;
+                        boolean containerCanPlace = false;
+                        if (isLiquidContainer) {
+                            try {
+                                containerCanPlace = ((net.minecraft.world.level.block.LiquidBlockContainer) stateAtPos.getBlock())
+                                        .canPlaceLiquid(level, candidate, stateAtPos, fluid);
+                            } catch (Exception ignored) {}
+                        }
+                        return !stateIsLegacy && !aeFluidKey.hasTag() && (stateIsAir || canBeReplaced || (isLiquidContainer && containerCanPlace));
                     }
-
-                    BlockPos supportingPoint = currentCandidate.relative(clickedFace.getOpposite());
-                    var supportingState = level.getBlockState(supportingPoint);
-
-                    boolean supportMatches = supportingState.getBlock() == clickedState.getBlock();
-                    if (!supportMatches && directionMode != DirectionMode.AUTO
-                            && !hasLockedModeSupport(currentCandidate, acceptedCandidates, directionMode)) {
-                        continue;
-                    }
-
-                    var stateAtPos = level.getBlockState(currentCandidate);
-                    boolean stateIsLegacy = stateAtPos == legacyBlock;
-                    boolean stateIsAir = stateAtPos.isAir();
-                    boolean canBeReplaced = false;
-                    try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Throwable ignored2) {}
-                    boolean isLiquidContainer = stateAtPos.getBlock() instanceof net.minecraft.world.level.block.LiquidBlockContainer;
-                    boolean containerCanPlace = false;
-                    if (isLiquidContainer) {
-                        try {
-                            containerCanPlace = ((net.minecraft.world.level.block.LiquidBlockContainer) stateAtPos.getBlock())
-                                    .canPlaceLiquid(level, currentCandidate, stateAtPos, fluid);
-                        } catch (Throwable ignored2) {}
-                    }
-
-                    boolean canPlace = !stateIsLegacy && !aeFluidKey.hasTag() && (stateIsAir || canBeReplaced || (isLiquidContainer && containerCanPlace));
-
-                    if (canPlace) {
-                        placePositions.add(currentCandidate);
-                        acceptedCandidates.add(currentCandidate);
-                        // Only expand candidates after successful placement (matches ConstructionWand behavior)
-                        addAdjacentPositions(candidates, currentCandidate, clickedFace, directionMode);
-                    }
-                }
+                );
                 if (placePositions.isEmpty()) {
                     player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
                     return InteractionResult.sidedSuccess(false);
@@ -304,7 +226,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                         var stateAtPos = level.getBlockState(placePos);
                         boolean stateIsAir = stateAtPos.isAir();
                         boolean canBeReplaced = false;
-                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Throwable ignored2) {}
+                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Exception ignored) {}
                         boolean isLiquidContainer = stateAtPos.getBlock() instanceof net.minecraft.world.level.block.LiquidBlockContainer;
 
                         boolean success = false;
@@ -323,7 +245,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                         if (success) {
                             placedCount++;
                         }
-                    } catch (Throwable t) {
+                    } catch (Exception t) {
                         LOGGER.warn("Exception during fluid placement at {}", placePos, t);
                     }
                 }
@@ -339,7 +261,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                     return InteractionResult.sidedSuccess(false);
                 }
             }
-        } catch (Throwable ignored) {}
+        } catch (Exception ignored) {}
 
         String fluidId = null;
         if (cfg != null && cfg.contains("fluids")) {
@@ -371,56 +293,29 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                 var clickedFace = context.getClickedFace();
                 var clickedState = level.getBlockState(clickedPos);
 
-                // Use BFS to find all positions where fluid can be placed (same logic as block placement)
-                java.util.LinkedList<BlockPos> candidates = new java.util.LinkedList<>();
-                java.util.HashSet<BlockPos> allCandidates = new java.util.HashSet<>();
-                java.util.ArrayList<BlockPos> placePositions = new java.util.ArrayList<>();
-                java.util.HashSet<BlockPos> acceptedCandidates = new java.util.HashSet<>();
-
-                BlockPos startingPoint = clickedPos.relative(clickedFace);
-                candidates.add(startingPoint);
-
-                // Limit max candidates explored to prevent infinite loop (performance fix)
-                final int MAX_CANDIDATES = placementCount * 10;
-
-                while (!candidates.isEmpty() && placePositions.size() < placementCount && allCandidates.size() < MAX_CANDIDATES) {
-                    BlockPos currentCandidate = candidates.removeFirst();
-                    if (!allCandidates.add(currentCandidate)) {
-                        continue;
+                var placePositions = PlacementBfs.findPositions(
+                    clickedPos.relative(clickedFace), placementCount, clickedFace, directionMode,
+                    candidate -> {
+                        BlockPos supportingPoint = candidate.relative(clickedFace.getOpposite());
+                        return level.getBlockState(supportingPoint).getBlock() == clickedState.getBlock();
+                    },
+                    candidate -> {
+                        var stateAtPos = level.getBlockState(candidate);
+                        boolean stateIsLegacy = stateAtPos == legacyBlock;
+                        boolean stateIsAir = stateAtPos.isAir();
+                        boolean canBeReplaced = false;
+                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Exception ignored) {}
+                        boolean isLiquidContainer = stateAtPos.getBlock() instanceof net.minecraft.world.level.block.LiquidBlockContainer;
+                        boolean containerCanPlace = false;
+                        if (isLiquidContainer) {
+                            try {
+                                containerCanPlace = ((net.minecraft.world.level.block.LiquidBlockContainer) stateAtPos.getBlock())
+                                        .canPlaceLiquid(level, candidate, stateAtPos, fluid);
+                            } catch (Exception ignored) {}
+                        }
+                        return !stateIsLegacy && !aeFluidKey.hasTag() && (stateIsAir || canBeReplaced || (isLiquidContainer && containerCanPlace));
                     }
-
-                    BlockPos supportingPoint = currentCandidate.relative(clickedFace.getOpposite());
-                    var supportingState = level.getBlockState(supportingPoint);
-
-                    boolean supportMatches = supportingState.getBlock() == clickedState.getBlock();
-                    if (!supportMatches && directionMode != DirectionMode.AUTO
-                            && !hasLockedModeSupport(currentCandidate, acceptedCandidates, directionMode)) {
-                        continue;
-                    }
-
-                    var stateAtPos = level.getBlockState(currentCandidate);
-                    boolean stateIsLegacy = stateAtPos == legacyBlock;
-                    boolean stateIsAir = stateAtPos.isAir();
-                    boolean canBeReplaced = false;
-                    try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Throwable ignored2) {}
-                    boolean isLiquidContainer = stateAtPos.getBlock() instanceof net.minecraft.world.level.block.LiquidBlockContainer;
-                    boolean containerCanPlace = false;
-                    if (isLiquidContainer) {
-                        try {
-                            containerCanPlace = ((net.minecraft.world.level.block.LiquidBlockContainer) stateAtPos.getBlock())
-                                    .canPlaceLiquid(level, currentCandidate, stateAtPos, fluid);
-                        } catch (Throwable ignored2) {}
-                    }
-
-                    boolean canPlace = !stateIsLegacy && !aeFluidKey.hasTag() && (stateIsAir || canBeReplaced || (isLiquidContainer && containerCanPlace));
-
-                    if (canPlace) {
-                        placePositions.add(currentCandidate);
-                        acceptedCandidates.add(currentCandidate);
-                        // Only expand candidates after successful placement (matches ConstructionWand behavior)
-                        addAdjacentPositions(candidates, currentCandidate, clickedFace, directionMode);
-                    }
-                }
+                );
                 if (placePositions.isEmpty()) {
                     player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
                     return InteractionResult.sidedSuccess(false);
@@ -441,7 +336,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                         var stateAtPos = level.getBlockState(placePos);
                         boolean stateIsAir = stateAtPos.isAir();
                         boolean canBeReplaced = false;
-                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Throwable ignored2) {}
+                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Exception ignored) {}
                         boolean isLiquidContainer = stateAtPos.getBlock() instanceof net.minecraft.world.level.block.LiquidBlockContainer;
 
                         boolean success = false;
@@ -460,7 +355,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                         if (success) {
                             placedCount++;
                         }
-                    } catch (Throwable t) {
+                    } catch (Exception t) {
                         LOGGER.warn("Exception during fluid placement at {}", placePos, t);
                     }
                 }
@@ -474,7 +369,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                     player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
                     return InteractionResult.sidedSuccess(false);
                 }
-            } catch (Throwable t) {
+            } catch (Exception t) {
                 LOGGER.warn("Exception during fluid placement for player {} at {}", player.getName().getString(), context.getClickedPos(), t);
             }
         }
@@ -527,39 +422,17 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
             Direction partSide = firstPlacement.side();
             boolean placingOnClickedHost = firstPlacement.pos().equals(clickedPos);
 
-            java.util.LinkedList<BlockPos> candidates = new java.util.LinkedList<>();
-            java.util.HashSet<BlockPos> allCandidates = new java.util.HashSet<>();
-            java.util.ArrayList<BlockPos> placePositions = new java.util.ArrayList<>();
-            java.util.HashSet<BlockPos> acceptedCandidates = new java.util.HashSet<>();
-
-            candidates.add(firstPlacement.pos());
-            final int MAX_CANDIDATES = placementCount * 10;
-
-            while (!candidates.isEmpty() && placePositions.size() < placementCount && allCandidates.size() < MAX_CANDIDATES) {
-                BlockPos currentCandidate = candidates.removeFirst();
-                if (!allCandidates.add(currentCandidate)) {
-                    continue;
-                }
-
-                boolean supportMatches;
-                if (placingOnClickedHost) {
-                    supportMatches = level.getBlockState(currentCandidate).getBlock() == clickedState.getBlock();
-                } else {
-                    BlockPos supportingPoint = currentCandidate.relative(partSide);
-                    supportMatches = level.getBlockState(supportingPoint).getBlock() == clickedState.getBlock();
-                }
-
-                if (!supportMatches && directionMode != DirectionMode.AUTO
-                        && !hasLockedModeSupport(currentCandidate, acceptedCandidates, directionMode)) {
-                    continue;
-                }
-
-                if (canPlaceConfiguredPartOnCable(player, level, target, currentCandidate, partSide)) {
-                    placePositions.add(currentCandidate);
-                    acceptedCandidates.add(currentCandidate);
-                    addAdjacentPositions(candidates, currentCandidate, context.getClickedFace(), directionMode);
-                }
-            }
+            var placePositions = PlacementBfs.findPositions(
+                firstPlacement.pos(), placementCount, context.getClickedFace(), directionMode,
+                candidate -> {
+                    if (placingOnClickedHost) {
+                        return level.getBlockState(candidate).getBlock() == clickedState.getBlock();
+                    } else {
+                        return level.getBlockState(candidate.relative(partSide)).getBlock() == clickedState.getBlock();
+                    }
+                },
+                candidate -> canPlaceConfiguredPartOnCable(player, level, target, candidate, partSide)
+            );
 
             if (placePositions.isEmpty()) {
                 player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
@@ -653,51 +526,24 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
         var clickedFace = context.getClickedFace();
         var clickedState = level.getBlockState(clickedPos);
 
-        java.util.LinkedList<BlockPos> candidates = new java.util.LinkedList<>();
-        java.util.HashSet<BlockPos> allCandidates = new java.util.HashSet<>();
-        java.util.ArrayList<BlockPos> placePositions = new java.util.ArrayList<>();
-        java.util.HashSet<BlockPos> acceptedCandidates = new java.util.HashSet<>();
-
-        BlockPos startingPoint = clickedPos.relative(clickedFace);
-        candidates.add(startingPoint);
-
-        // Limit max candidates explored to prevent infinite loop (performance fix)
-        final int MAX_CANDIDATES = placementCount * 10;
-
-        while (!candidates.isEmpty() && placePositions.size() < placementCount && allCandidates.size() < MAX_CANDIDATES) {
-            BlockPos currentCandidate = candidates.removeFirst();
-            if (!allCandidates.add(currentCandidate)) {
-                continue;
+        var placePositions = PlacementBfs.findPositions(
+            clickedPos.relative(clickedFace), placementCount, clickedFace, directionMode,
+            candidate -> level.getBlockState(candidate.relative(clickedFace.getOpposite())).getBlock() == clickedState.getBlock(),
+            candidate -> {
+                boolean canPlace = level.isEmptyBlock(candidate);
+                if (!canPlace) {
+                    try {
+                        BlockPlaceContext checkContext = new BlockPlaceContext(new net.minecraft.world.item.context.UseOnContext(
+                            player, context.getHand(), new net.minecraft.world.phys.BlockHitResult(
+                                context.getClickLocation(), context.getClickedFace(), candidate, context.isInside()
+                            )
+                        ));
+                        canPlace = level.getBlockState(candidate).canBeReplaced(checkContext);
+                    } catch (Exception ignored) {}
+                }
+                return canPlace;
             }
-
-            BlockPos supportingPoint = currentCandidate.relative(clickedFace.getOpposite());
-            var supportingState = level.getBlockState(supportingPoint);
-
-            boolean supportMatches = supportingState.getBlock() == clickedState.getBlock();
-            if (!supportMatches && directionMode != DirectionMode.AUTO
-                    && !hasLockedModeSupport(currentCandidate, acceptedCandidates, directionMode)) {
-                continue;
-            }
-
-            var currentState = level.getBlockState(currentCandidate);
-            boolean canPlace = level.isEmptyBlock(currentCandidate);
-            if (!canPlace) {
-                try {
-                    BlockPlaceContext checkContext = new BlockPlaceContext(new net.minecraft.world.item.context.UseOnContext(
-                        player, context.getHand(), new net.minecraft.world.phys.BlockHitResult(
-                            context.getClickLocation(), context.getClickedFace(), currentCandidate, context.isInside()
-                        )
-                    ));
-                    canPlace = currentState.canBeReplaced(checkContext);
-                } catch (Throwable t) {}
-            }
-            if (canPlace) {
-                placePositions.add(currentCandidate);
-                acceptedCandidates.add(currentCandidate);
-                // Only expand candidates after successful placement (matches ConstructionWand behavior)
-                addAdjacentPositions(candidates, currentCandidate, clickedFace, directionMode);
-            }
-        }
+        );
 
         if (placePositions.isEmpty()) {
             player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
@@ -765,7 +611,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                     // Track extraction
                     extractionMap.merge(currentKey, 1L, Long::sum);
                 }
-            } catch (Throwable t) {
+            } catch (Exception t) {
                 LOGGER.warn("Exception during placement attempt for player {} at {}", player.getName().getString(), placePos, t);
             } finally {
                 player.setItemInHand(InteractionHand.MAIN_HAND, origMain);
@@ -865,87 +711,12 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
             ItemStack partStack) {
         try {
             return PartPlacement.placePart(player, level, (IPartItem) partItem, partStack.getTag(), pos, side) != null;
-        } catch (Throwable t) {
+        } catch (Exception t) {
             LOGGER.warn("Exception during part placement attempt for player {} at {}", player.getName().getString(), pos, t);
             return false;
         }
     }
 
-    private void addAdjacentPositions(java.util.LinkedList<BlockPos> candidates, BlockPos pos,
-            net.minecraft.core.Direction face, DirectionMode directionMode) {
-        switch (directionMode) {
-            case NORTH_SOUTH:
-                candidates.add(pos.north());
-                candidates.add(pos.south());
-                break;
-            case EAST_WEST:
-                candidates.add(pos.east());
-                candidates.add(pos.west());
-                break;
-            case VERTICAL:
-                candidates.add(pos.above());
-                candidates.add(pos.below());
-                break;
-            case AUTO:
-            default:
-                addAutoAdjacentPositions(candidates, pos, face);
-                break;
-        }
-    }
-
-    private boolean hasLockedModeSupport(BlockPos candidate, java.util.Set<BlockPos> acceptedCandidates,
-            DirectionMode directionMode) {
-        switch (directionMode) {
-            case NORTH_SOUTH:
-                return acceptedCandidates.contains(candidate.north()) || acceptedCandidates.contains(candidate.south());
-            case EAST_WEST:
-                return acceptedCandidates.contains(candidate.east()) || acceptedCandidates.contains(candidate.west());
-            case VERTICAL:
-                return acceptedCandidates.contains(candidate.above()) || acceptedCandidates.contains(candidate.below());
-            case AUTO:
-            default:
-                return false;
-        }
-    }
-
-    private void addAutoAdjacentPositions(java.util.LinkedList<BlockPos> candidates, BlockPos pos,
-            net.minecraft.core.Direction face) {
-        switch (face) {
-            case DOWN:
-            case UP:
-                candidates.add(pos.north());
-                candidates.add(pos.south());
-                candidates.add(pos.east());
-                candidates.add(pos.west());
-                candidates.add(pos.north().east());
-                candidates.add(pos.north().west());
-                candidates.add(pos.south().east());
-                candidates.add(pos.south().west());
-                break;
-            case NORTH:
-            case SOUTH:
-                candidates.add(pos.east());
-                candidates.add(pos.west());
-                candidates.add(pos.above());
-                candidates.add(pos.below());
-                candidates.add(pos.above().east());
-                candidates.add(pos.above().west());
-                candidates.add(pos.below().east());
-                candidates.add(pos.below().west());
-                break;
-            case EAST:
-            case WEST:
-                candidates.add(pos.north());
-                candidates.add(pos.south());
-                candidates.add(pos.above());
-                candidates.add(pos.below());
-                candidates.add(pos.above().north());
-                candidates.add(pos.above().south());
-                candidates.add(pos.below().north());
-                candidates.add(pos.below().south());
-                break;
-        }
-    }
 
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
@@ -957,17 +728,9 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
         }
 
         if (!level.isClientSide() && player instanceof ServerPlayer serverPlayer) {
-            CompoundTag data = wand.getOrCreateTag();
-            CompoundTag cfg = data.contains(WandMenu.TAG_KEY) ? data.getCompound(WandMenu.TAG_KEY) : null;
+            CompoundTag cfg = WandNbt.getConfig(wand);
 
-            var handler = new ItemStackHandler(18);
-            if (cfg != null) {
-                if (cfg.contains("items")) {
-                    handler.deserializeNBT(cfg.getCompound("items"));
-                } else {
-                    handler.deserializeNBT(cfg);
-                }
-            }
+            var handler = WandNbt.readInventory(cfg);
 
             NetworkHooks.openScreen(serverPlayer,
                 new SimpleMenuProvider((wnd, inv, pl) -> new WandMenu(wnd, inv, handler), Component.empty()),

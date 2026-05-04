@@ -36,7 +36,7 @@ import net.minecraft.world.phys.shapes.Shapes;
 import net.minecraftforge.client.event.RenderHighlightEvent;
 import net.minecraftforge.common.MinecraftForge;
 import net.minecraftforge.eventbus.api.EventPriority;
-import net.minecraftforge.items.ItemStackHandler;
+
 
 import appeng.api.parts.IPart;
 import appeng.api.parts.IPartItem;
@@ -44,7 +44,7 @@ import appeng.parts.BusCollisionHelper;
 import appeng.parts.PartPlacement;
 
 import com.moakiee.meplacementtool.MEPlacementToolMod;
-import com.moakiee.meplacementtool.WandMenu;
+import com.moakiee.meplacementtool.WandNbt;
 
 /**
  * Renders placement preview for ME Placement Tool when holding cables, panels, quartz fiber, etc.
@@ -151,28 +151,9 @@ public class MEPartPreviewRenderer {
      * Get the currently configured item from the wand's NBT
      */
     private static ItemStack getConfiguredItem(ItemStack wand) {
-        CompoundTag data = wand.getOrCreateTag();
-        CompoundTag cfg = null;
-        if (data.contains(WandMenu.TAG_KEY)) {
-            cfg = data.getCompound(WandMenu.TAG_KEY);
-        }
-
-        // Get selected slot index (default 0)
-        int selected = 0;
-        if (cfg != null && cfg.contains("SelectedSlot")) {
-            selected = cfg.getInt("SelectedSlot");
-            if (selected < 0 || selected >= 18) selected = 0;
-        }
-
-        // Build handler from NBT
-        var handler = new ItemStackHandler(18);
-        if (cfg != null) {
-            if (cfg.contains("items")) {
-                handler.deserializeNBT(cfg.getCompound("items"));
-            } else {
-                handler.deserializeNBT(cfg);
-            }
-        }
+        CompoundTag cfg = WandNbt.getConfig(wand);
+        int selected = WandNbt.getSelectedSlot(cfg);
+        var handler = WandNbt.readInventory(cfg);
 
         ItemStack target = handler.getStackInSlot(selected);
         
@@ -183,7 +164,7 @@ public class MEPartPreviewRenderer {
                 if (unwrapped != null && unwrapped.what() instanceof appeng.api.stacks.AEItemKey itemKey) {
                     return itemKey.toStack();
                 }
-            } catch (Throwable ignored) {}
+            } catch (Exception ignored) {}
         }
         
         return target;

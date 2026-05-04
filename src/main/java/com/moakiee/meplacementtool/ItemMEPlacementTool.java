@@ -12,10 +12,6 @@ import appeng.api.networking.IGridNode;
 import appeng.api.networking.security.IActionHost;
 import appeng.api.networking.crafting.ICraftingService;
 import appeng.api.stacks.AEKey;
-import appeng.api.storage.ISubMenuHost;
-import appeng.menu.MenuOpener;
-import appeng.menu.locator.MenuLocators;
-import appeng.menu.me.crafting.CraftAmountMenu;
 import appeng.menu.ISubMenu;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
@@ -35,7 +31,7 @@ import net.minecraft.world.level.Level;
 import net.minecraftforge.network.NetworkHooks;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
-import net.minecraftforge.items.ItemStackHandler;
+
 
 /**
  * ME Placement Tool - extends BasePlacementToolItem to avoid being recognized as WirelessTerminalItem
@@ -53,35 +49,6 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
             // Close the menu directly instead of returning to a main menu
             p.closeContainer();
         });
-    }
-
-    /**
-     * Open the crafting menu for an item that can be crafted.
-     * Uses the placement tool itself as the menu host, so we can control the close behavior.
-     */
-    private void openCraftingMenu(ServerPlayer player, ItemStack wand, AEKey whatToCraft) {
-        // Find the slot containing the placement tool
-        int wandSlot = findInventorySlot(player, wand);
-        if (wandSlot >= 0) {
-            CraftAmountMenu.open(player, MenuLocators.forInventorySlot(wandSlot), whatToCraft, 1);
-        } else if (player.getMainHandItem() == wand) {
-            CraftAmountMenu.open(player, MenuLocators.forHand(player, net.minecraft.world.InteractionHand.MAIN_HAND), whatToCraft, 1);
-        } else if (player.getOffhandItem() == wand) {
-            CraftAmountMenu.open(player, MenuLocators.forHand(player, net.minecraft.world.InteractionHand.OFF_HAND), whatToCraft, 1);
-        }
-    }
-
-    /**
-     * Find the inventory slot containing the given item stack
-     */
-    private int findInventorySlot(Player player, ItemStack itemStack) {
-        var inv = player.getInventory();
-        for (int i = 0; i < inv.getContainerSize(); i++) {
-            if (inv.getItem(i) == itemStack) {
-                return i;
-            }
-        }
-        return -1;
     }
 
     @Override
@@ -115,28 +82,9 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
         }
 
         // read config NBT from item
-        CompoundTag data = wand.getOrCreateTag();
-        CompoundTag cfg = null;
-        if (data.contains(WandMenu.TAG_KEY)) {
-            cfg = data.getCompound(WandMenu.TAG_KEY);
-        }
-
-        // selected slot index (default 0) - read from placement_config tag
-        int selected = 0;
-        if (cfg != null && cfg.contains("SelectedSlot")) {
-            selected = cfg.getInt("SelectedSlot");
-            if (selected < 0 || selected >= 18) selected = 0;
-        }
-
-        // build handler from NBT
-        var handler = new ItemStackHandler(18);
-        if (cfg != null) {
-            if (cfg.contains("items")) {
-                handler.deserializeNBT(cfg.getCompound("items"));
-            } else {
-                handler.deserializeNBT(cfg);
-            }
-        }
+        CompoundTag cfg = WandNbt.getConfig(wand);
+        int selected = WandNbt.getSelectedSlot(cfg);
+        var handler = WandNbt.readInventory(cfg);
 
         ItemStack target = handler.getStackInSlot(selected);
         if (target == null || target.isEmpty()) {
@@ -183,14 +131,14 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
                         boolean stateIsLegacy = stateAtPos == legacyBlock;
                         boolean stateIsAir = stateAtPos.isAir();
                         boolean canBeReplaced = false;
-                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Throwable ignored2) {}
+                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Exception ignored) {}
                         boolean isLiquidContainer = stateAtPos.getBlock() instanceof net.minecraft.world.level.block.LiquidBlockContainer;
                         boolean containerCanPlace = false;
                         if (isLiquidContainer) {
                             try {
                                 containerCanPlace = ((net.minecraft.world.level.block.LiquidBlockContainer) stateAtPos.getBlock())
                                         .canPlaceLiquid(level, fluidPlacePos, stateAtPos, fluid);
-                            } catch (Throwable ignored2) {}
+                            } catch (Exception ignored) {}
                         }
                         boolean hasTag = aeFluidKey.hasTag();
 
@@ -219,7 +167,7 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
                             }
                         }
                     }
-                } catch (Throwable t) {
+                } catch (Exception t) {
                     LOGGER.warn("Exception during wrapped fluid placement for player {} at {}", player.getName().getString(), fluidPlacePos, t);
                 }
 
@@ -227,7 +175,7 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
                     // Extract FLUID from AE network (not bucket!)
                     long extracted = storage.extract(aeFluidKey, appeng.api.stacks.AEFluidKey.AMOUNT_BLOCK, appeng.api.config.Actionable.MODULATE, src);
                     if (extracted <= 0) {
-                        try { level.setBlockAndUpdate(fluidPlacePos, prevState); } catch (Throwable t) { LOGGER.warn("Failed to revert fluid block at {}", fluidPlacePos, t); }
+                        try { level.setBlockAndUpdate(fluidPlacePos, prevState); } catch (Exception t) { LOGGER.warn("Failed to revert fluid block at {}", fluidPlacePos, t); }
                         player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
                         return InteractionResult.sidedSuccess(false);
                     } else {
@@ -241,7 +189,7 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
                     return InteractionResult.sidedSuccess(false);
                 }
             }
-        } catch (Throwable ignored) {}
+        } catch (Exception ignored) {}
 
         // Check if the selected slot is a fluid (stored in placement_config.fluids)
         String fluidId = null;
@@ -289,7 +237,7 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
                         player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
                         return InteractionResult.sidedSuccess(false);
                     }
-                } catch (Throwable t) {
+                } catch (Exception t) {
                     LOGGER.warn("Error during pre-check for fluid placement at {}", fluidPlacePos, t);
                 }
 
@@ -311,14 +259,14 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
                         boolean stateIsLegacy = stateAtPos == legacyBlock;
                         boolean stateIsAir = stateAtPos.isAir();
                         boolean canBeReplaced = false;
-                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Throwable ignored) {}
+                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Exception ignored) {}
                         boolean isLiquidContainer = stateAtPos.getBlock() instanceof net.minecraft.world.level.block.LiquidBlockContainer;
                         boolean containerCanPlace = false;
                         if (isLiquidContainer) {
                             try {
                                 containerCanPlace = ((net.minecraft.world.level.block.LiquidBlockContainer) stateAtPos.getBlock())
                                         .canPlaceLiquid(level, fluidPlacePos, stateAtPos, fluid);
-                            } catch (Throwable ignored) {}
+                            } catch (Exception ignored) {}
                         }
                         boolean hasTag = aeFluidKey.hasTag();
                         
@@ -351,14 +299,14 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
                             }
                         }
                     }
-                } catch (Throwable t) {
+                } catch (Exception t) {
                     LOGGER.warn("Exception during fluid placement for player {} at {}", player.getName().getString(), fluidPlacePos, t);
                 }
 
                 if (placedFluid) {
                     long extracted = storage.extract(aeFluidKey, appeng.api.stacks.AEFluidKey.AMOUNT_BLOCK, appeng.api.config.Actionable.MODULATE, src);
                     if (extracted <= 0) {
-                        try { level.setBlockAndUpdate(fluidPlacePos, prevState); } catch (Throwable t) { LOGGER.warn("Failed to revert fluid block at {}", fluidPlacePos, t); }
+                        try { level.setBlockAndUpdate(fluidPlacePos, prevState); } catch (Exception t) { LOGGER.warn("Failed to revert fluid block at {}", fluidPlacePos, t); }
                         player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
                         return InteractionResult.sidedSuccess(false);
                     } else {
@@ -387,7 +335,7 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
             var craftKey = appeng.api.stacks.AEItemKey.of(target);
             var craftingService = grid.getCraftingService();
             if (craftingService != null && craftKey != null && craftingService.isCraftable(craftKey)) {
-                openCraftingMenu(serverPlayer, wand, craftKey);
+                openCraftingMenu(serverPlayer, wand, craftKey, 1);
                 return InteractionResult.sidedSuccess(false);
             }
             player.displayClientMessage(Component.translatable("message.meplacementtool.network_missing", target.getHoverName()), true);
@@ -403,7 +351,7 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
             var craftingService = grid.getCraftingService();
             if (craftingService != null && craftingService.isCraftable(aeKey)) {
                 // Open crafting menu for the item
-                openCraftingMenu(serverPlayer, wand, aeKey);
+                openCraftingMenu(serverPlayer, wand, aeKey, 1);
                 return InteractionResult.sidedSuccess(false);
             }
             player.displayClientMessage(Component.translatable("message.meplacementtool.network_missing", target.getHoverName()), true);
@@ -459,7 +407,7 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
                         lastPlacementPos = blockPlacePos;
                         lastPlacementWasBlock = true;
                     }
-                } catch (Throwable t) {
+                } catch (Exception t) {
                     LOGGER.warn("Exception during placement attempt for player {} at {}", player.getName().getString(), blockPlacePos, t);
                 } finally {
                     // restore original items
@@ -489,10 +437,10 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
                                 }
                             }
                         }
-                    } catch (Throwable t) {
+                    } catch (Exception t) {
                         LOGGER.warn("Exception while using PartPlacement for player {} at {}", player.getName().getString(), partTargetPos, t);
                     }
-                } catch (Throwable t) {
+                } catch (Exception t) {
                     LOGGER.warn("Exception during part placement attempt for player {} at {}", player.getName().getString(), partTargetPos, t);
                 } finally {
                     player.setItemInHand(InteractionHand.MAIN_HAND, origMain);
@@ -550,19 +498,19 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
                         } else {
                             // debug removed: failed to create facade from item stack
                         }
-                    } catch (Throwable t) {
-                        LOGGER.error("Exception during facade placement attempt for player {} at {}", 
+                    } catch (Exception t) {
+                        LOGGER.error("Exception during facade placement attempt for player {} at {}",
                             player.getName().getString(), context.getClickedPos(), t);
                     }
-                } catch (Throwable t) {
-                    LOGGER.error("Exception during facade placement for player {} at {}", 
+                } catch (Exception t) {
+                    LOGGER.error("Exception during facade placement for player {} at {}",
                         player.getName().getString(), context.getClickedPos(), t);
                 } finally {
                     player.setItemInHand(InteractionHand.MAIN_HAND, origMain);
                     player.setItemInHand(InteractionHand.OFF_HAND, origOff);
                 }
             }
-        } catch (Throwable ignored) {
+        } catch (Exception ignored) {
         }
 
         if (placed) {
@@ -578,7 +526,7 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
                         // For part placements we cannot reliably revert generically; just log the situation
                         LOGGER.warn("Extraction failed after part placement at {} — manual cleanup may be required", revertPos);
                     }
-                } catch (Throwable t) {
+                } catch (Exception t) {
                     LOGGER.warn("Failed to revert block at {}", revertPos, t);
                 }
                 // drop the stack as fallback
@@ -601,7 +549,7 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
                 try {
                     var finalState = level.getBlockState(soundPos);
                     level.sendBlockUpdated(soundPos, prevStateBlock, finalState, 3);
-                } catch (Throwable ignored) {}
+                } catch (Exception ignored) {}
 
                 // Apply memory card / config card settings from off-hand if present
                 if (MemoryCardHelper.hasConfiguredMemoryCard(player)) {
@@ -634,18 +582,10 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
         }
 
         if (!level.isClientSide() && player instanceof ServerPlayer serverPlayer) {
-            CompoundTag data = stack.getOrCreateTag();
-            CompoundTag cfg = data.contains(WandMenu.TAG_KEY) ? data.getCompound(WandMenu.TAG_KEY) : null;
+            CompoundTag cfg = WandNbt.getConfig(stack);
 
             // create handler from existing NBT (server side)
-            var handler = new ItemStackHandler(18);
-            if (cfg != null) {
-                if (cfg.contains("items")) {
-                    handler.deserializeNBT(cfg.getCompound("items"));
-                } else {
-                    handler.deserializeNBT(cfg);
-                }
-            }
+            var handler = WandNbt.readInventory(cfg);
 
             NetworkHooks.openScreen(serverPlayer,
                 new SimpleMenuProvider((wnd, inv, pl) -> new WandMenu(wnd, inv, handler), Component.empty()),

@@ -24,6 +24,7 @@ import appeng.api.stacks.GenericStack;
 import com.moakiee.meplacementtool.ItemMultiblockPlacementTool.DirectionMode;
 import com.moakiee.meplacementtool.MEPlacementToolMod;
 import com.moakiee.meplacementtool.WandMenu;
+import com.moakiee.meplacementtool.WandNbt;
 import com.moakiee.meplacementtool.network.ModNetwork;
 import com.moakiee.meplacementtool.network.UpdateDirectionModePacket;
 import com.moakiee.meplacementtool.network.UpdatePlacementCountPacket;
@@ -85,11 +86,9 @@ public class DualLayerRadialMenuScreen extends Screen {
             currentPlacementCount = data.getInt("placement_count");
         }
 
-        CompoundTag cfg = data.contains(WandMenu.TAG_KEY) ? data.getCompound(WandMenu.TAG_KEY) : null;
+        CompoundTag cfg = WandNbt.getConfig(wandStack);
         if (cfg != null) {
-            if (cfg.contains("SelectedSlot")) {
-                currentSelectedSlot = cfg.getInt("SelectedSlot");
-            }
+            currentSelectedSlot = WandNbt.getSelectedSlot(cfg);
             if (cfg.contains("DirectionMode")) {
                 currentDirection = DirectionMode.fromId(cfg.getInt("DirectionMode"));
             }
@@ -107,16 +106,12 @@ public class DualLayerRadialMenuScreen extends Screen {
             return;
         }
 
-        CompoundTag data = wandStack.getOrCreateTag();
-        CompoundTag cfg = data.contains(WandMenu.TAG_KEY) ? data.getCompound(WandMenu.TAG_KEY) : null;
+        CompoundTag cfg = WandNbt.getConfig(wandStack);
         if (cfg == null) {
             return;
         }
 
-        ItemStackHandler handler = new ItemStackHandler(18);
-        if (cfg.contains("items")) {
-            handler.deserializeNBT(cfg.getCompound("items"));
-        }
+        ItemStackHandler handler = WandNbt.readInventory(cfg);
 
         CompoundTag fluids = cfg.contains("fluids") ? cfg.getCompound("fluids") : new CompoundTag();
 
@@ -133,7 +128,7 @@ public class DualLayerRadialMenuScreen extends Screen {
                         slots.add(new SlotData(i, stack, name, AEFluidKey.is(gs.what())));
                         continue;
                     }
-                } catch (Throwable ignored) {
+                } catch (Exception ignored) {
                 }
 
                 slots.add(new SlotData(i, stack, stack.getHoverName().getString(), false));
@@ -147,7 +142,7 @@ public class DualLayerRadialMenuScreen extends Screen {
                         String name = aeFluidKey.getDisplayName().getString();
                         slots.add(new SlotData(i, wrapped, name, true));
                     }
-                } catch (Throwable ignored) {
+                } catch (Exception ignored) {
                 }
             }
         }

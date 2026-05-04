@@ -68,7 +68,7 @@ public class WandGhostIngredientHandler implements DraggableStackVisitor<WandScr
                         AEFluidKey.of(fluidStack.getFluid(), fluidStack.getTag()),
                         fluidStack.getAmount());
                 return GenericStack.wrapInItemStack(wrappedFluid);
-            } catch (Throwable ignored) {
+            } catch (Exception ignored) {
                 // If AE2 helper fails, fall through
             }
         }
@@ -134,7 +134,7 @@ public class WandGhostIngredientHandler implements DraggableStackVisitor<WandScr
                 combined.put("fluids", ftag);
                 ModNetwork.CHANNEL.sendToServer(new UpdateWandConfigPacket(combined));
                 return true;
-            } catch (Throwable t) {
+            } catch (Exception t) {
                 // Swallow to avoid REI breaking
                 return false;
             }

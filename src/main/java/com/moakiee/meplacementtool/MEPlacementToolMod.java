@@ -127,6 +127,7 @@ public class MEPlacementToolMod
         CREATIVE_MODE_TABS.register(modEventBus);
 
         MinecraftForge.EVENT_BUS.register(this);
+        MinecraftForge.EVENT_BUS.register(undoHistory);
 
 
 
@@ -248,7 +249,7 @@ public class MEPlacementToolMod
                         int w = font.width(lastCountText);
                         gg.drawString(font, lastCountText, x - w / 2, y, 0xFFFF00, false);
                     }
-                } catch (Throwable t) {
+                } catch (Exception t) {
                     LogUtils.getLogger().warn("Error rendering overlay", t);
                 }
             }

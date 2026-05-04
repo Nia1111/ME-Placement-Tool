@@ -9,6 +9,8 @@ import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.state.BlockState;
+import net.minecraftforge.event.entity.player.PlayerEvent;
+import net.minecraftforge.eventbus.api.SubscribeEvent;
 import appeng.api.networking.IGrid;
 import appeng.api.parts.IPart;
 import appeng.api.parts.IPartHost;
@@ -22,11 +24,34 @@ import java.util.*;
 
 public class UndoHistory
 {
-    private final HashMap<UUID, PlayerEntry> history;
+    private final LinkedHashMap<UUID, PlayerEntry> history;
     private static final int MAX_HISTORY_SIZE = 1;
+    private static final int MAX_IDLE_PLAYER_ENTRIES = 100;
 
     public UndoHistory() {
-        history = new HashMap<>();
+        history = new LinkedHashMap<>(16, 0.75f, true);
+    }
+
+    /**
+     * Called when a player logs out to clean up their undo history.
+     */
+    @SubscribeEvent
+    public void onPlayerLoggedOut(PlayerEvent.PlayerLoggedOutEvent event) {
+        history.remove(event.getEntity().getUUID());
+    }
+
+    /**
+     * Remove stale entries if the map grows too large.
+     * Evicts the oldest (least recently accessed) entries to stay under the limit.
+     * Called periodically from placement operations.
+     */
+    public void trimIfNeeded() {
+        if (history.size() <= MAX_IDLE_PLAYER_ENTRIES) return;
+        var iter = history.keySet().iterator();
+        while (history.size() > MAX_IDLE_PLAYER_ENTRIES && iter.hasNext()) {
+            iter.next();
+            iter.remove();
+        }
     }
 
     private PlayerEntry getEntryFromPlayer(Player player) {
@@ -38,6 +63,7 @@ public class UndoHistory
     }
 
     public void add(Player player, Level world, List<PlacementSnapshot> placeSnapshots, boolean memoryCardApplied) {
+        trimIfNeeded();
         LinkedList<HistoryEntry> list = getEntryFromPlayer(player).entries;
         list.clear();
         list.add(new HistoryEntry(placeSnapshots, world, memoryCardApplied, false));
@@ -48,6 +74,7 @@ public class UndoHistory
      * When undoing cable placements, we return transparent cables instead of the colored ones.
      */
     public void addCablePlacement(Player player, Level world, List<CablePlacementSnapshot> cableSnapshots) {
+        trimIfNeeded();
         LinkedList<HistoryEntry> list = getEntryFromPlayer(player).entries;
         list.clear();
         // Convert CablePlacementSnapshot to PlacementSnapshot for storage

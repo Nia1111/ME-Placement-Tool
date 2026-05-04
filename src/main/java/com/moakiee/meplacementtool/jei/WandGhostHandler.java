@@ -77,7 +77,7 @@ public class WandGhostHandler implements IGhostIngredientHandler<WandScreen> {
                             combined.put("fluids", ftag);
                             com.moakiee.meplacementtool.network.ModNetwork.CHANNEL.sendToServer(
                                     new com.moakiee.meplacementtool.network.UpdateWandConfigPacket(combined));
-                    } catch (Throwable t) {
+                    } catch (Exception t) {
                         // swallow to avoid JEI breaking
                     }
                 }
