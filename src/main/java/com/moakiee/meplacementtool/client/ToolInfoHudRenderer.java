@@ -67,15 +67,11 @@ public class ToolInfoHudRenderer {
         // Determine current tool item
         Item currentToolItem = null;
         ItemStack currentToolStack = ItemStack.EMPTY;
-        
-        if (mainHand.getItem() instanceof ItemMEPlacementTool ||
-            mainHand.getItem() instanceof ItemMultiblockPlacementTool ||
-            mainHand.getItem() instanceof ItemMECablePlacementTool) {
+
+        if (isPlacementTool(mainHand.getItem())) {
             currentToolItem = mainHand.getItem();
             currentToolStack = mainHand;
-        } else if (offHand.getItem() instanceof ItemMEPlacementTool ||
-                   offHand.getItem() instanceof ItemMultiblockPlacementTool ||
-                   offHand.getItem() instanceof ItemMECablePlacementTool) {
+        } else if (isPlacementTool(offHand.getItem())) {
             currentToolItem = offHand.getItem();
             currentToolStack = offHand;
         }
@@ -229,9 +225,12 @@ public class ToolInfoHudRenderer {
         };
     }
 
-    /**
-     * Render HUD lines on the right side of the crosshair with small font.
-     */
+    private static boolean isPlacementTool(Item item) {
+        return item instanceof ItemMEPlacementTool
+            || item instanceof ItemMultiblockPlacementTool
+            || item instanceof ItemMECablePlacementTool;
+    }
+
     private void renderHudLines(GuiGraphics guiGraphics, Minecraft mc, List<String> lines) {
         int screenWidth = mc.getWindow().getGuiScaledWidth();
         int screenHeight = mc.getWindow().getGuiScaledHeight();
