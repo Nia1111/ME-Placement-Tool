@@ -252,7 +252,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
 
                 if (placedCount > 0) {
                     long extracted = storage.extract(aeFluidKey, (long) placedCount * appeng.api.stacks.AEFluidKey.AMOUNT_BLOCK, appeng.api.config.Actionable.MODULATE, src);
-                    LOGGER.info("Consuming {} AE from wand for player {} (placedCount={})", ENERGY_COST * placedCount / placementCount, player.getName().getString(), placedCount);
+                    LOGGER.debug("Consuming {} AE from wand for player {} (placedCount={})", ENERGY_COST * placedCount / placementCount, player.getName().getString(), placedCount);
                     this.usePower(player, ENERGY_COST * placedCount / placementCount, wand);
                     level.playSound(null, clickedPos.relative(clickedFace), SoundEvents.BUCKET_EMPTY, SoundSource.BLOCKS, 1.0F, 1.0F);
                     return InteractionResult.sidedSuccess(false);
@@ -503,7 +503,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
 
             MEPlacementToolMod.instance.undoHistory.add(player, level, placedSnapshots, configApplied);
 
-            LOGGER.info("Consuming {} AE from wand for player {} (placedCount={})", ENERGY_COST * placedCount / placementCount, player.getName().getString(), placedCount);
+            LOGGER.debug("Consuming {} AE from wand for player {} (placedCount={})", ENERGY_COST * placedCount / placementCount, player.getName().getString(), placedCount);
             this.usePower(player, ENERGY_COST * placedCount / placementCount, wand);
             if (!placedSnapshots.isEmpty()) {
                 BlockPos soundPos = placedSnapshots.get(0).pos;
@@ -664,7 +664,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
         // Add to undo history, marking as non-undoable if config was applied
         MEPlacementToolMod.instance.undoHistory.add(player, level, placedSnapshots, configApplied);
 
-        LOGGER.info("Consuming {} AE from wand for player {} (placedCount={})", ENERGY_COST * placedCount / placementCount, player.getName().getString(), placedCount);
+        LOGGER.debug("Consuming {} AE from wand for player {} (placedCount={})", ENERGY_COST * placedCount / placementCount, player.getName().getString(), placedCount);
         this.usePower(player, ENERGY_COST * placedCount / placementCount, wand);
         // Play the block's own placement sound (use first placed position)
         if (!placedSnapshots.isEmpty()) {
