@@ -360,17 +360,19 @@ public class CablePreviewRenderer {
 
         // 1. Render Trunk with rainbow gradient bounding box
         List<BlockPos> trunkPositions = new ArrayList<>();
+        BlockPos.MutableBlockPos trunkMut = new BlockPos.MutableBlockPos();
         for (int t = 0; t <= trunkLength; t++) {
             int tx = x1, ty = y1, tz = z1;
             if (trunkAxis == 0) tx = x1 + t * trunkDir;
             else if (trunkAxis == 1) ty = y1 + t * trunkDir;
             else tz = z1 + t * trunkDir;
-            trunkPositions.add(new BlockPos(tx, ty, tz));
+            trunkPositions.add(trunkMut.set(tx, ty, tz).immutable());
         }
         renderRainbowBoundingBox(poseStack, buffers, camera, level, trunkPositions, 0.6f, false);
         renderRainbowBoundingBox(poseStack, buffers, camera, level, trunkPositions, 0.2f, true);
 
         // 2. Render Branches with rainbow gradient bounding boxes
+        BlockPos.MutableBlockPos branchMut = new BlockPos.MutableBlockPos();
         for (int t = 0; t <= trunkLength; t++) {
             if (t % interval == 0) {
                 int tx = x1, ty = y1, tz = z1;
@@ -384,7 +386,7 @@ public class CablePreviewRenderer {
                     if (branchAxis == 0) bx = tx + b * branchDir;
                     else if (branchAxis == 1) by = ty + b * branchDir;
                     else bz = tz + b * branchDir;
-                    branchPositions.add(new BlockPos(bx, by, bz));
+                    branchPositions.add(branchMut.set(bx, by, bz).immutable());
                 }
                 if (!branchPositions.isEmpty()) {
                     renderRainbowBoundingBox(poseStack, buffers, camera, level, branchPositions, 0.6f, false);

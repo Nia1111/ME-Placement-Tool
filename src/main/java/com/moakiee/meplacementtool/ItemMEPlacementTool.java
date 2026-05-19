@@ -3,20 +3,8 @@ package com.moakiee.meplacementtool;
 import com.mojang.logging.LogUtils;
 import org.slf4j.Logger;
 
-import java.util.function.DoubleSupplier;
-import java.util.function.BiConsumer;
-
 import appeng.api.implementations.menuobjects.IMenuItem;
 import appeng.api.implementations.menuobjects.ItemMenuHost;
-import appeng.api.networking.IGridNode;
-import appeng.api.networking.security.IActionHost;
-import appeng.api.networking.crafting.ICraftingService;
-import appeng.api.stacks.AEKey;
-import appeng.api.storage.ISubMenuHost;
-import appeng.menu.MenuOpener;
-import appeng.menu.locator.MenuLocators;
-import appeng.menu.me.crafting.CraftAmountMenu;
-import appeng.menu.ISubMenu;
 import net.minecraft.core.BlockPos;
 import net.minecraft.network.chat.Component;
 import net.minecraft.nbt.CompoundTag;
@@ -26,7 +14,6 @@ import net.minecraft.world.InteractionResult;
 import net.minecraft.world.InteractionResultHolder;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.SimpleMenuProvider;
-import net.minecraft.world.inventory.AbstractContainerMenu;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.UseOnContext;
@@ -35,7 +22,7 @@ import net.minecraft.world.level.Level;
 import net.minecraftforge.network.NetworkHooks;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
-import net.minecraftforge.items.ItemStackHandler;
+
 
 /**
  * ME Placement Tool - extends BasePlacementToolItem to avoid being recognized as WirelessTerminalItem
@@ -53,35 +40,6 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
             // Close the menu directly instead of returning to a main menu
             p.closeContainer();
         });
-    }
-
-    /**
-     * Open the crafting menu for an item that can be crafted.
-     * Uses the placement tool itself as the menu host, so we can control the close behavior.
-     */
-    private void openCraftingMenu(ServerPlayer player, ItemStack wand, AEKey whatToCraft) {
-        // Find the slot containing the placement tool
-        int wandSlot = findInventorySlot(player, wand);
-        if (wandSlot >= 0) {
-            CraftAmountMenu.open(player, MenuLocators.forInventorySlot(wandSlot), whatToCraft, 1);
-        } else if (player.getMainHandItem() == wand) {
-            CraftAmountMenu.open(player, MenuLocators.forHand(player, net.minecraft.world.InteractionHand.MAIN_HAND), whatToCraft, 1);
-        } else if (player.getOffhandItem() == wand) {
-            CraftAmountMenu.open(player, MenuLocators.forHand(player, net.minecraft.world.InteractionHand.OFF_HAND), whatToCraft, 1);
-        }
-    }
-
-    /**
-     * Find the inventory slot containing the given item stack
-     */
-    private int findInventorySlot(Player player, ItemStack itemStack) {
-        var inv = player.getInventory();
-        for (int i = 0; i < inv.getContainerSize(); i++) {
-            if (inv.getItem(i) == itemStack) {
-                return i;
-            }
-        }
-        return -1;
     }
 
     @Override
@@ -115,28 +73,9 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
         }
 
         // read config NBT from item
-        CompoundTag data = wand.getOrCreateTag();
-        CompoundTag cfg = null;
-        if (data.contains(WandMenu.TAG_KEY)) {
-            cfg = data.getCompound(WandMenu.TAG_KEY);
-        }
-
-        // selected slot index (default 0) - read from placement_config tag
-        int selected = 0;
-        if (cfg != null && cfg.contains("SelectedSlot")) {
-            selected = cfg.getInt("SelectedSlot");
-            if (selected < 0 || selected >= 18) selected = 0;
-        }
-
-        // build handler from NBT
-        var handler = new ItemStackHandler(18);
-        if (cfg != null) {
-            if (cfg.contains("items")) {
-                handler.deserializeNBT(cfg.getCompound("items"));
-            } else {
-                handler.deserializeNBT(cfg);
-            }
-        }
+        CompoundTag cfg = WandNbt.getConfig(wand);
+        int selected = WandNbt.getSelectedSlot(cfg);
+        var handler = WandNbt.readInventory(cfg);
 
         ItemStack target = handler.getStackInSlot(selected);
         if (target == null || target.isEmpty()) {
@@ -159,89 +98,10 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
         try {
             var unwrapped = appeng.api.stacks.GenericStack.unwrapItemStack(target);
             if (unwrapped != null && appeng.api.stacks.AEFluidKey.is(unwrapped.what())) {
-                // Direct fluid placement from AE network (same logic as fluidId branch)
                 var aeFluidKey = (appeng.api.stacks.AEFluidKey) unwrapped.what();
-                var fluid = aeFluidKey.getFluid();
-
-                BlockPos fluidPlacePos = context.getClickedPos().relative(context.getClickedFace());
-                var prevState = level.getBlockState(fluidPlacePos);
-
-                // Check AE network has enough fluid
-                long simAvail = storage.extract(aeFluidKey, appeng.api.stacks.AEFluidKey.AMOUNT_BLOCK, appeng.api.config.Actionable.SIMULATE, src);
-                if (simAvail < appeng.api.stacks.AEFluidKey.AMOUNT_BLOCK) {
-                    player.displayClientMessage(Component.translatable("message.meplacementtool.network_missing", aeFluidKey.getDisplayName()), true);
-                    return InteractionResult.FAIL;
-                }
-
-                boolean placedFluid = false;
-                try {
-                    if (level instanceof net.minecraft.server.level.ServerLevel serverLevel) {
-                        // Check if placement is possible using AE's canPlace logic
-                        var stateAtPos = level.getBlockState(fluidPlacePos);
-                        boolean isFlowingFluid = fluid instanceof net.minecraft.world.level.material.FlowingFluid;
-                        var legacyBlock = fluid.defaultFluidState().createLegacyBlock();
-                        boolean stateIsLegacy = stateAtPos == legacyBlock;
-                        boolean stateIsAir = stateAtPos.isAir();
-                        boolean canBeReplaced = false;
-                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Throwable ignored2) {}
-                        boolean isLiquidContainer = stateAtPos.getBlock() instanceof net.minecraft.world.level.block.LiquidBlockContainer;
-                        boolean containerCanPlace = false;
-                        if (isLiquidContainer) {
-                            try {
-                                containerCanPlace = ((net.minecraft.world.level.block.LiquidBlockContainer) stateAtPos.getBlock())
-                                        .canPlaceLiquid(level, fluidPlacePos, stateAtPos, fluid);
-                            } catch (Throwable ignored2) {}
-                        }
-                        boolean hasTag = aeFluidKey.hasTag();
-
-                        boolean aeCanPlace = isFlowingFluid && !stateIsLegacy && !hasTag && (stateIsAir || canBeReplaced || (isLiquidContainer && containerCanPlace));
-
-                        if (aeCanPlace) {
-                            // Direct placement using level.setBlock like AE does
-                            boolean success = false;
-                            if (level.dimensionType().ultraWarm() && fluid.is(net.minecraft.tags.FluidTags.WATER)) {
-                                level.playSound(null, fluidPlacePos, SoundEvents.FIRE_EXTINGUISH, SoundSource.BLOCKS, 0.5F, 2.6F);
-                                success = true;
-                            } else if (isLiquidContainer && fluid == net.minecraft.world.level.material.Fluids.WATER) {
-                                ((net.minecraft.world.level.block.LiquidBlockContainer) stateAtPos.getBlock())
-                                        .placeLiquid(level, fluidPlacePos, stateAtPos, ((net.minecraft.world.level.material.FlowingFluid) fluid).getSource(false));
-                                success = true;
-                            } else {
-                                if (canBeReplaced && !stateAtPos.liquid()) {
-                                    level.destroyBlock(fluidPlacePos, true);
-                                }
-                                success = level.setBlock(fluidPlacePos, legacyBlock, net.minecraft.world.level.block.Block.UPDATE_ALL_IMMEDIATE);
-                            }
-                            if (success) {
-                                placedFluid = true;
-                                lastPlacementPos = fluidPlacePos;
-                                lastPlacementWasBlock = true;
-                            }
-                        }
-                    }
-                } catch (Throwable t) {
-                    LOGGER.warn("Exception during wrapped fluid placement for player {} at {}", player.getName().getString(), fluidPlacePos, t);
-                }
-
-                if (placedFluid) {
-                    // Extract FLUID from AE network (not bucket!)
-                    long extracted = storage.extract(aeFluidKey, appeng.api.stacks.AEFluidKey.AMOUNT_BLOCK, appeng.api.config.Actionable.MODULATE, src);
-                    if (extracted <= 0) {
-                        try { level.setBlockAndUpdate(fluidPlacePos, prevState); } catch (Throwable t) { LOGGER.warn("Failed to revert fluid block at {}", fluidPlacePos, t); }
-                        player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
-                        return InteractionResult.sidedSuccess(false);
-                    } else {
-                        LOGGER.info("Consuming {} AE from wand for player {}", ENERGY_COST, player.getName().getString());
-                        this.usePower(player, ENERGY_COST, wand);
-                        level.playSound(null, fluidPlacePos, SoundEvents.BUCKET_EMPTY, SoundSource.BLOCKS, 1.0F, 1.0F);
-                        return InteractionResult.sidedSuccess(false);
-                    }
-                } else {
-                    player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
-                    return InteractionResult.sidedSuccess(false);
-                }
+                return placeFluidFromNetwork(level, player, wand, context, ENERGY_COST, storage, src, aeFluidKey, aeFluidKey.getFluid());
             }
-        } catch (Throwable ignored) {}
+        } catch (Exception ignored) {}
 
         // Check if the selected slot is a fluid (stored in placement_config.fluids)
         String fluidId = null;
@@ -254,123 +114,15 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
         }
 
         if (fluidId != null) {
-            // Try to resolve the fluid and its bucket item
             try {
                 var fid = new net.minecraft.resources.ResourceLocation(fluidId);
                 var fluid = net.minecraftforge.registries.ForgeRegistries.FLUIDS.getValue(fid);
-                if (fluid == null) {
+                if (fluid == null || fluid.getBucket() == net.minecraft.world.item.Items.AIR) {
                     player.displayClientMessage(Component.translatable("message.meplacementtool.unsupported_target"), true);
                     return InteractionResult.FAIL;
                 }
-
-                var bucketItem = fluid.getBucket();
-                if (bucketItem == net.minecraft.world.item.Items.AIR) {
-                    // No bucket available -> unsupported for now
-                    player.displayClientMessage(Component.translatable("message.meplacementtool.unsupported_target"), true);
-                    return InteractionResult.FAIL;
-                }
-
-                // Use AE's FluidPlacementStrategy to place fluid directly from AE network
-                BlockPos fluidPlacePos = context.getClickedPos().relative(context.getClickedFace());
-                var prevState = level.getBlockState(fluidPlacePos);
-
-                // Quick client/server independent pre-check mimicking AE's canPlace
-                try {
-                    boolean isFlowing = fluid instanceof net.minecraft.world.level.material.FlowingFluid;
-                    var legacy = fluid.defaultFluidState().createLegacyBlock();
-                    if (prevState == legacy) {
-                        player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
-                        return InteractionResult.sidedSuccess(false);
-                    }
-                    boolean canPlaceLikeAE = isFlowing && (prevState.isAir() || prevState.canBeReplaced(fluid)
-                            || (prevState.getBlock() instanceof net.minecraft.world.level.block.LiquidBlockContainer
-                                && ((net.minecraft.world.level.block.LiquidBlockContainer) prevState.getBlock()).canPlaceLiquid(level, fluidPlacePos, prevState, fluid)));
-                    if (!canPlaceLikeAE) {
-                        player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
-                        return InteractionResult.sidedSuccess(false);
-                    }
-                } catch (Throwable t) {
-                    LOGGER.warn("Error during pre-check for fluid placement at {}", fluidPlacePos, t);
-                }
-
-                // Prepare AEFluidKey and ensure network has enough
-                var aeFluidKey = appeng.api.stacks.AEFluidKey.of(fluid);
-                long simAvail = storage.extract(aeFluidKey, appeng.api.stacks.AEFluidKey.AMOUNT_BLOCK, appeng.api.config.Actionable.SIMULATE, src);
-                if (simAvail < appeng.api.stacks.AEFluidKey.AMOUNT_BLOCK) {
-                    player.displayClientMessage(Component.translatable("message.meplacementtool.network_missing", aeFluidKey.getDisplayName()), true);
-                    return InteractionResult.FAIL;
-                }
-
-                boolean placedFluid = false;
-                try {
-                    if (level instanceof net.minecraft.server.level.ServerLevel serverLevel) {
-                        // Detailed diagnostic before calling FluidPlacementStrategy
-                        var stateAtPos = level.getBlockState(fluidPlacePos);
-                        boolean isFlowingFluid = fluid instanceof net.minecraft.world.level.material.FlowingFluid;
-                        var legacyBlock = fluid.defaultFluidState().createLegacyBlock();
-                        boolean stateIsLegacy = stateAtPos == legacyBlock;
-                        boolean stateIsAir = stateAtPos.isAir();
-                        boolean canBeReplaced = false;
-                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Throwable ignored) {}
-                        boolean isLiquidContainer = stateAtPos.getBlock() instanceof net.minecraft.world.level.block.LiquidBlockContainer;
-                        boolean containerCanPlace = false;
-                        if (isLiquidContainer) {
-                            try {
-                                containerCanPlace = ((net.minecraft.world.level.block.LiquidBlockContainer) stateAtPos.getBlock())
-                                        .canPlaceLiquid(level, fluidPlacePos, stateAtPos, fluid);
-                            } catch (Throwable ignored) {}
-                        }
-                        boolean hasTag = aeFluidKey.hasTag();
-                        
-                        // AE's canPlace logic
-                        boolean aeCanPlace = isFlowingFluid && !stateIsLegacy && !hasTag && (stateIsAir || canBeReplaced || (isLiquidContainer && containerCanPlace));
-                        
-                        if (!aeCanPlace) {
-                            player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
-                        } else {
-                            // Directly place using level.setBlock like AE does
-                            boolean success = false;
-                            if (level.dimensionType().ultraWarm() && fluid.is(net.minecraft.tags.FluidTags.WATER)) {
-                                // Water evaporates in nether but still "succeeds"
-                                level.playSound(null, fluidPlacePos, SoundEvents.FIRE_EXTINGUISH, SoundSource.BLOCKS, 0.5F, 2.6F);
-                                success = true;
-                            } else if (isLiquidContainer && fluid == net.minecraft.world.level.material.Fluids.WATER) {
-                                ((net.minecraft.world.level.block.LiquidBlockContainer) stateAtPos.getBlock())
-                                        .placeLiquid(level, fluidPlacePos, stateAtPos, ((net.minecraft.world.level.material.FlowingFluid) fluid).getSource(false));
-                                success = true;
-                            } else {
-                                if (canBeReplaced && !stateAtPos.liquid()) {
-                                    level.destroyBlock(fluidPlacePos, true);
-                                }
-                                success = level.setBlock(fluidPlacePos, legacyBlock, net.minecraft.world.level.block.Block.UPDATE_ALL_IMMEDIATE);
-                            }
-                            if (success) {
-                                placedFluid = true;
-                                lastPlacementPos = fluidPlacePos;
-                                lastPlacementWasBlock = true;
-                            }
-                        }
-                    }
-                } catch (Throwable t) {
-                    LOGGER.warn("Exception during fluid placement for player {} at {}", player.getName().getString(), fluidPlacePos, t);
-                }
-
-                if (placedFluid) {
-                    long extracted = storage.extract(aeFluidKey, appeng.api.stacks.AEFluidKey.AMOUNT_BLOCK, appeng.api.config.Actionable.MODULATE, src);
-                    if (extracted <= 0) {
-                        try { level.setBlockAndUpdate(fluidPlacePos, prevState); } catch (Throwable t) { LOGGER.warn("Failed to revert fluid block at {}", fluidPlacePos, t); }
-                        player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
-                        return InteractionResult.sidedSuccess(false);
-                    } else {
-                        LOGGER.info("Consuming {} AE from wand for player {}", ENERGY_COST, player.getName().getString());
-                        this.usePower(player, ENERGY_COST, wand);
-                        level.playSound(null, fluidPlacePos, SoundEvents.BUCKET_EMPTY, SoundSource.BLOCKS, 1.0F, 1.0F);
-                        return InteractionResult.sidedSuccess(false);
-                    }
-                } else {
-                    player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
-                    return InteractionResult.sidedSuccess(false);
-                }
+                return placeFluidFromNetwork(level, player, wand, context, ENERGY_COST, storage, src,
+                        appeng.api.stacks.AEFluidKey.of(fluid), fluid);
             } catch (Exception e) {
                 LOGGER.warn("Error resolving fluid {}", fluidId, e);
                 player.displayClientMessage(Component.translatable("message.meplacementtool.unsupported_target"), true);
@@ -387,7 +139,7 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
             var craftKey = appeng.api.stacks.AEItemKey.of(target);
             var craftingService = grid.getCraftingService();
             if (craftingService != null && craftKey != null && craftingService.isCraftable(craftKey)) {
-                openCraftingMenu(serverPlayer, wand, craftKey);
+                openCraftingMenu(serverPlayer, wand, craftKey, 1);
                 return InteractionResult.sidedSuccess(false);
             }
             player.displayClientMessage(Component.translatable("message.meplacementtool.network_missing", target.getHoverName()), true);
@@ -403,7 +155,7 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
             var craftingService = grid.getCraftingService();
             if (craftingService != null && craftingService.isCraftable(aeKey)) {
                 // Open crafting menu for the item
-                openCraftingMenu(serverPlayer, wand, aeKey);
+                openCraftingMenu(serverPlayer, wand, aeKey, 1);
                 return InteractionResult.sidedSuccess(false);
             }
             player.displayClientMessage(Component.translatable("message.meplacementtool.network_missing", target.getHoverName()), true);
@@ -459,7 +211,7 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
                         lastPlacementPos = blockPlacePos;
                         lastPlacementWasBlock = true;
                     }
-                } catch (Throwable t) {
+                } catch (Exception t) {
                     LOGGER.warn("Exception during placement attempt for player {} at {}", player.getName().getString(), blockPlacePos, t);
                 } finally {
                     // restore original items
@@ -489,10 +241,10 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
                                 }
                             }
                         }
-                    } catch (Throwable t) {
+                    } catch (Exception t) {
                         LOGGER.warn("Exception while using PartPlacement for player {} at {}", player.getName().getString(), partTargetPos, t);
                     }
-                } catch (Throwable t) {
+                } catch (Exception t) {
                     LOGGER.warn("Exception during part placement attempt for player {} at {}", player.getName().getString(), partTargetPos, t);
                 } finally {
                     player.setItemInHand(InteractionHand.MAIN_HAND, origMain);
@@ -550,19 +302,19 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
                         } else {
                             // debug removed: failed to create facade from item stack
                         }
-                    } catch (Throwable t) {
-                        LOGGER.error("Exception during facade placement attempt for player {} at {}", 
+                    } catch (Exception t) {
+                        LOGGER.error("Exception during facade placement attempt for player {} at {}",
                             player.getName().getString(), context.getClickedPos(), t);
                     }
-                } catch (Throwable t) {
-                    LOGGER.error("Exception during facade placement for player {} at {}", 
+                } catch (Exception t) {
+                    LOGGER.error("Exception during facade placement for player {} at {}",
                         player.getName().getString(), context.getClickedPos(), t);
                 } finally {
                     player.setItemInHand(InteractionHand.MAIN_HAND, origMain);
                     player.setItemInHand(InteractionHand.OFF_HAND, origOff);
                 }
             }
-        } catch (Throwable ignored) {
+        } catch (Exception ignored) {
         }
 
         if (placed) {
@@ -578,7 +330,7 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
                         // For part placements we cannot reliably revert generically; just log the situation
                         LOGGER.warn("Extraction failed after part placement at {} — manual cleanup may be required", revertPos);
                     }
-                } catch (Throwable t) {
+                } catch (Exception t) {
                     LOGGER.warn("Failed to revert block at {}", revertPos, t);
                 }
                 // drop the stack as fallback
@@ -601,7 +353,7 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
                 try {
                     var finalState = level.getBlockState(soundPos);
                     level.sendBlockUpdated(soundPos, prevStateBlock, finalState, 3);
-                } catch (Throwable ignored) {}
+                } catch (Exception ignored) {}
 
                 // Apply memory card / config card settings from off-hand if present
                 if (MemoryCardHelper.hasConfiguredMemoryCard(player)) {
@@ -624,6 +376,85 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
         return InteractionResult.sidedSuccess(false);
     }
 
+    private InteractionResult placeFluidFromNetwork(Level level, Player player, ItemStack wand, UseOnContext context,
+            double energyCost,
+            appeng.api.storage.MEStorage storage,
+            appeng.me.helpers.PlayerSource src,
+            appeng.api.stacks.AEFluidKey aeFluidKey,
+            net.minecraft.world.level.material.Fluid fluid) {
+
+        BlockPos fluidPlacePos = context.getClickedPos().relative(context.getClickedFace());
+        var prevState = level.getBlockState(fluidPlacePos);
+
+        long simAvail = storage.extract(aeFluidKey, appeng.api.stacks.AEFluidKey.AMOUNT_BLOCK, appeng.api.config.Actionable.SIMULATE, src);
+        if (simAvail < appeng.api.stacks.AEFluidKey.AMOUNT_BLOCK) {
+            player.displayClientMessage(Component.translatable("message.meplacementtool.network_missing", aeFluidKey.getDisplayName()), true);
+            return InteractionResult.FAIL;
+        }
+
+        boolean placedFluid = false;
+        try {
+            if (level instanceof net.minecraft.server.level.ServerLevel) {
+                var stateAtPos = level.getBlockState(fluidPlacePos);
+                boolean isFlowingFluid = fluid instanceof net.minecraft.world.level.material.FlowingFluid;
+                var legacyBlock = fluid.defaultFluidState().createLegacyBlock();
+                boolean stateIsLegacy = stateAtPos == legacyBlock;
+                boolean stateIsAir = stateAtPos.isAir();
+                boolean canBeReplaced = false;
+                try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Exception ignored) {}
+                boolean isLiquidContainer = stateAtPos.getBlock() instanceof net.minecraft.world.level.block.LiquidBlockContainer;
+                boolean containerCanPlace = false;
+                if (isLiquidContainer) {
+                    try {
+                        containerCanPlace = ((net.minecraft.world.level.block.LiquidBlockContainer) stateAtPos.getBlock())
+                                .canPlaceLiquid(level, fluidPlacePos, stateAtPos, fluid);
+                    } catch (Exception ignored) {}
+                }
+                boolean hasTag = aeFluidKey.hasTag();
+
+                boolean aeCanPlace = isFlowingFluid && !stateIsLegacy && !hasTag
+                        && (stateIsAir || canBeReplaced || (isLiquidContainer && containerCanPlace));
+
+                if (aeCanPlace) {
+                    boolean success = false;
+                    if (level.dimensionType().ultraWarm() && fluid.is(net.minecraft.tags.FluidTags.WATER)) {
+                        level.playSound(null, fluidPlacePos, SoundEvents.FIRE_EXTINGUISH, SoundSource.BLOCKS, 0.5F, 2.6F);
+                        success = true;
+                    } else if (isLiquidContainer && fluid == net.minecraft.world.level.material.Fluids.WATER) {
+                        ((net.minecraft.world.level.block.LiquidBlockContainer) stateAtPos.getBlock())
+                                .placeLiquid(level, fluidPlacePos, stateAtPos, ((net.minecraft.world.level.material.FlowingFluid) fluid).getSource(false));
+                        success = true;
+                    } else {
+                        if (canBeReplaced && !stateAtPos.liquid()) {
+                            level.destroyBlock(fluidPlacePos, true);
+                        }
+                        success = level.setBlock(fluidPlacePos, legacyBlock, net.minecraft.world.level.block.Block.UPDATE_ALL_IMMEDIATE);
+                    }
+                    if (success) {
+                        placedFluid = true;
+                    }
+                }
+            }
+        } catch (Exception t) {
+            LOGGER.warn("Exception during fluid placement for player {} at {}", player.getName().getString(), fluidPlacePos, t);
+        }
+
+        if (placedFluid) {
+            long extracted = storage.extract(aeFluidKey, appeng.api.stacks.AEFluidKey.AMOUNT_BLOCK, appeng.api.config.Actionable.MODULATE, src);
+            if (extracted <= 0) {
+                try { level.setBlockAndUpdate(fluidPlacePos, prevState); } catch (Exception t) { LOGGER.warn("Failed to revert fluid block at {}", fluidPlacePos, t); }
+                player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
+                return InteractionResult.sidedSuccess(false);
+            }
+            this.usePower(player, energyCost, wand);
+            level.playSound(null, fluidPlacePos, SoundEvents.BUCKET_EMPTY, SoundSource.BLOCKS, 1.0F, 1.0F);
+            return InteractionResult.sidedSuccess(false);
+        }
+
+        player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
+        return InteractionResult.sidedSuccess(false);
+    }
+
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
         ItemStack stack = player.getItemInHand(hand);
@@ -634,18 +465,10 @@ public class ItemMEPlacementTool extends BasePlacementToolItem implements IMenuI
         }
 
         if (!level.isClientSide() && player instanceof ServerPlayer serverPlayer) {
-            CompoundTag data = stack.getOrCreateTag();
-            CompoundTag cfg = data.contains(WandMenu.TAG_KEY) ? data.getCompound(WandMenu.TAG_KEY) : null;
+            CompoundTag cfg = WandNbt.getConfig(stack);
 
             // create handler from existing NBT (server side)
-            var handler = new ItemStackHandler(18);
-            if (cfg != null) {
-                if (cfg.contains("items")) {
-                    handler.deserializeNBT(cfg.getCompound("items"));
-                } else {
-                    handler.deserializeNBT(cfg);
-                }
-            }
+            var handler = WandNbt.readInventory(cfg);
 
             NetworkHooks.openScreen(serverPlayer,
                 new SimpleMenuProvider((wnd, inv, pl) -> new WandMenu(wnd, inv, handler), Component.empty()),

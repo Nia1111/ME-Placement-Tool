@@ -170,7 +170,7 @@ public class Config
             if (stack.getItem() instanceof appeng.api.implementations.items.IFacadeItem) {
                 return false;
             }
-        } catch (Throwable ignored) {
+        } catch (Exception ignored) {
             // If AE API not present or any error occurs, fall back to config-based behavior
         }
 

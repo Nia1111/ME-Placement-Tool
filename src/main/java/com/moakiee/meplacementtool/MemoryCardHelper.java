@@ -10,6 +10,7 @@ import appeng.api.networking.IGrid;
 import appeng.api.parts.IPart;
 import appeng.api.parts.IPartHost;
 import appeng.api.stacks.AEItemKey;
+import appeng.api.storage.MEStorage;
 import appeng.blockentity.AEBaseBlockEntity;
 import appeng.core.definitions.AEItems;
 import appeng.core.definitions.AEBlocks;
@@ -63,6 +64,24 @@ public class MemoryCardHelper {
         }
         
         return count;
+    }
+
+    /**
+     * Check only the amount still needed from ME storage to avoid overflowing int counters
+     * with effectively unlimited storage providers.
+     */
+    private static long countAvailableFromNetwork(MEStorage storage, Item item, long needed, Player player) {
+        if (needed <= 0) {
+            return 0;
+        }
+
+        var key = AEItemKey.of(item);
+        if (key == null) {
+            return 0;
+        }
+
+        var src = new PlayerSource(player);
+        return Math.min(needed, storage.extract(key, needed, Actionable.SIMULATE, src));
     }
 
     /**
@@ -382,19 +401,18 @@ public class MemoryCardHelper {
         // Check blank patterns
         int patternsPerBlock = countPatternsInMemoryCard(data);
         if (patternsPerBlock > 0) {
-            int totalPatternsNeeded = patternsPerBlock * blockCount;
-            int available = countItemInPlayerAndNetworkTool(player, AEItems.BLANK_PATTERN.asItem());
+            long totalPatternsNeeded = (long) patternsPerBlock * blockCount;
+            long available = countItemInPlayerAndNetworkTool(player, AEItems.BLANK_PATTERN.asItem());
             
             // Also count from AE network
             if (grid != null) {
                 var storage = grid.getStorageService().getInventory();
-                var blankPatternKey = AEItemKey.of(AEItems.BLANK_PATTERN.asItem());
-                var src = new PlayerSource(player);
-                available += (int) storage.extract(blankPatternKey, Integer.MAX_VALUE, Actionable.SIMULATE, src);
+                available += countAvailableFromNetwork(storage, AEItems.BLANK_PATTERN.asItem(),
+                        totalPatternsNeeded - available, player);
             }
 
             if (available < totalPatternsNeeded) {
-                missingItems.put(AEItems.BLANK_PATTERN.asItem(), totalPatternsNeeded - available);
+                missingItems.put(AEItems.BLANK_PATTERN.asItem(), saturatingInt(totalPatternsNeeded - available));
             }
         }
 
@@ -402,25 +420,25 @@ public class MemoryCardHelper {
         Map<Item, Integer> upgradesPerBlock = getUpgradesInMemoryCard(data);
         for (var entry : upgradesPerBlock.entrySet()) {
             Item upgradeItem = entry.getKey();
-            int totalNeeded = entry.getValue() * blockCount;
-            int available = countItemInPlayerAndNetworkTool(player, upgradeItem);
+            long totalNeeded = (long) entry.getValue() * blockCount;
+            long available = countItemInPlayerAndNetworkTool(player, upgradeItem);
 
             // Also count from AE network
             if (grid != null) {
                 var storage = grid.getStorageService().getInventory();
-                var upgradeKey = AEItemKey.of(upgradeItem);
-                if (upgradeKey != null) {
-                    var src = new PlayerSource(player);
-                    available += (int) storage.extract(upgradeKey, Integer.MAX_VALUE, Actionable.SIMULATE, src);
-                }
+                available += countAvailableFromNetwork(storage, upgradeItem, totalNeeded - available, player);
             }
 
             if (available < totalNeeded) {
-                missingItems.put(upgradeItem, totalNeeded - available);
+                missingItems.put(upgradeItem, saturatingInt(totalNeeded - available));
             }
         }
 
         return new ResourceCheckResult(missingItems.isEmpty(), missingItems);
+    }
+
+    private static int saturatingInt(long value) {
+        return value > Integer.MAX_VALUE ? Integer.MAX_VALUE : (int) Math.max(value, 0);
     }
 
     /**

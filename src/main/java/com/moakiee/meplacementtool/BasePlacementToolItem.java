@@ -4,13 +4,15 @@ import java.util.List;
 import java.util.function.DoubleSupplier;
 
 import org.jetbrains.annotations.Nullable;
+import org.slf4j.Logger;
 
-import net.minecraft.core.BlockPos;
+import com.mojang.logging.LogUtils;
+
 import net.minecraft.core.GlobalPos;
 import net.minecraft.nbt.NbtOps;
-import net.minecraft.nbt.Tag;
 import net.minecraft.network.chat.Component;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
@@ -23,10 +25,13 @@ import appeng.api.config.Actionable;
 import appeng.api.features.IGridLinkableHandler;
 import appeng.api.implementations.blockentities.IWirelessAccessPoint;
 import appeng.api.networking.IGrid;
+import appeng.api.stacks.AEKey;
 import appeng.core.localization.GuiText;
 import appeng.core.localization.PlayerMessages;
 import appeng.core.localization.Tooltips;
 import appeng.items.tools.powered.powersink.AEBasePoweredItem;
+import appeng.menu.locator.MenuLocators;
+import appeng.menu.me.crafting.CraftAmountMenu;
 import appeng.util.Platform;
 
 /**
@@ -37,13 +42,42 @@ import appeng.util.Platform;
  * so other mods checking instanceof WirelessTerminalItem will not match.
  */
 public abstract class BasePlacementToolItem extends AEBasePoweredItem {
-    
+
+    private static final Logger LOGGER = LogUtils.getLogger();
+
     private static final String TAG_ACCESS_POINT_POS = "accessPoint";
-    
+
     public static final IGridLinkableHandler LINKABLE_HANDLER = new LinkableHandler();
-    
+
     public BasePlacementToolItem(DoubleSupplier powerCapacity, Item.Properties props) {
         super(powerCapacity, props);
+    }
+
+    /**
+     * Find the inventory slot containing the given item stack.
+     */
+    protected static int findInventorySlot(Player player, ItemStack itemStack) {
+        var inv = player.getInventory();
+        for (int i = 0; i < inv.getContainerSize(); i++) {
+            if (inv.getItem(i) == itemStack) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    /**
+     * Open the crafting menu for an item that can be crafted.
+     */
+    protected static void openCraftingMenu(ServerPlayer player, ItemStack wand, AEKey whatToCraft, int amount) {
+        int wandSlot = findInventorySlot(player, wand);
+        if (wandSlot >= 0) {
+            CraftAmountMenu.open(player, MenuLocators.forInventorySlot(wandSlot), whatToCraft, amount);
+        } else if (player.getMainHandItem() == wand) {
+            CraftAmountMenu.open(player, MenuLocators.forHand(player, net.minecraft.world.InteractionHand.MAIN_HAND), whatToCraft, amount);
+        } else if (player.getOffhandItem() == wand) {
+            CraftAmountMenu.open(player, MenuLocators.forHand(player, net.minecraft.world.InteractionHand.OFF_HAND), whatToCraft, amount);
+        }
     }
     
     @Override

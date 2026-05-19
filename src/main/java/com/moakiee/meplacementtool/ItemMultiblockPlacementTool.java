@@ -13,13 +13,13 @@ import appeng.api.implementations.menuobjects.ItemMenuHost;
 import appeng.api.networking.IGridNode;
 import appeng.api.networking.security.IActionHost;
 import appeng.api.networking.crafting.ICraftingService;
+import appeng.api.parts.IPartItem;
+import appeng.api.parts.PartHelper;
 import appeng.api.stacks.AEKey;
-import appeng.api.storage.ISubMenuHost;
-import appeng.menu.MenuOpener;
-import appeng.menu.locator.MenuLocators;
-import appeng.menu.me.crafting.CraftAmountMenu;
 import appeng.menu.ISubMenu;
+import appeng.parts.PartPlacement;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.network.chat.Component;
 import net.minecraft.nbt.CompoundTag;
 import net.minecraft.server.level.ServerPlayer;
@@ -38,7 +38,7 @@ import net.minecraft.world.level.Level;
 import net.minecraftforge.network.NetworkHooks;
 import net.minecraft.sounds.SoundEvents;
 import net.minecraft.sounds.SoundSource;
-import net.minecraftforge.items.ItemStackHandler;
+
 
 /**
  * ME Multiblock Placement Tool - extends BasePlacementToolItem to avoid being recognized as WirelessTerminalItem
@@ -47,6 +47,29 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int[] PLACEMENT_COUNTS = {1, 8, 64, 256, 1024};
     private static final String TAG_PLACEMENT_COUNT = "placement_count";
+
+    /**
+     * Placement direction modes for bulk placement.
+     * AUTO uses BFS across the face plane.
+     */
+    public enum DirectionMode {
+        AUTO,
+        NORTH_SOUTH,
+        EAST_WEST,
+        VERTICAL;
+
+        public static DirectionMode fromId(int id) {
+            DirectionMode[] values = values();
+            if (id < 0 || id >= values.length) {
+                return AUTO;
+            }
+            return values[id];
+        }
+
+        public String translationKey() {
+            return "meplacementtool.direction." + name().toLowerCase(java.util.Locale.ROOT);
+        }
+    }
 
     public ItemMultiblockPlacementTool(Item.Properties props) {
         super(() -> Config.multiblockPlacementToolEnergyCapacity, props);
@@ -76,42 +99,23 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
         return PLACEMENT_COUNTS[0];
     }
 
+    public static DirectionMode getDirectionMode(ItemStack stack) {
+        CompoundTag data = stack.getTag();
+        if (data != null && data.contains(WandMenu.TAG_KEY)) {
+            CompoundTag cfg = data.getCompound(WandMenu.TAG_KEY);
+            if (cfg.contains("DirectionMode")) {
+                return DirectionMode.fromId(cfg.getInt("DirectionMode"));
+            }
+        }
+        return DirectionMode.AUTO;
+    }
+
     @Override
     public ItemMenuHost getMenuHost(Player player, int inventorySlot, ItemStack itemStack, BlockPos pos) {
         return new PlacementToolMenuHost(player, inventorySlot, itemStack, (p, subMenu) -> {
             // Close the menu directly instead of returning to a main menu
             p.closeContainer();
         });
-    }
-
-    /**
-     * Open the crafting menu for an item that can be crafted.
-     * Uses the placement tool itself as the menu host, so we can control the close behavior.
-     * @param amount The amount to pre-fill in the crafting request
-     */
-    private void openCraftingMenu(ServerPlayer player, ItemStack wand, AEKey whatToCraft, int amount) {
-        // Find the slot containing the placement tool
-        int wandSlot = findInventorySlot(player, wand);
-        if (wandSlot >= 0) {
-            CraftAmountMenu.open(player, MenuLocators.forInventorySlot(wandSlot), whatToCraft, amount);
-        } else if (player.getMainHandItem() == wand) {
-            CraftAmountMenu.open(player, MenuLocators.forHand(player, net.minecraft.world.InteractionHand.MAIN_HAND), whatToCraft, amount);
-        } else if (player.getOffhandItem() == wand) {
-            CraftAmountMenu.open(player, MenuLocators.forHand(player, net.minecraft.world.InteractionHand.OFF_HAND), whatToCraft, amount);
-        }
-    }
-
-    /**
-     * Find the inventory slot containing the given item stack
-     */
-    private int findInventorySlot(Player player, ItemStack itemStack) {
-        var inv = player.getInventory();
-        for (int i = 0; i < inv.getContainerSize(); i++) {
-            if (inv.getItem(i) == itemStack) {
-                return i;
-            }
-        }
-        return -1;
     }
 
     @Override
@@ -141,31 +145,19 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
             return InteractionResult.FAIL;
         }
 
-        CompoundTag data = wand.getOrCreateTag();
-        CompoundTag cfg = null;
-        if (data.contains(WandMenu.TAG_KEY)) {
-            cfg = data.getCompound(WandMenu.TAG_KEY);
-        }
-
-        int selected = 0;
-        if (cfg != null && cfg.contains("SelectedSlot")) {
-            selected = cfg.getInt("SelectedSlot");
-            if (selected < 0 || selected >= 18) selected = 0;
-        }
-
-        var handler = new ItemStackHandler(18);
-        if (cfg != null) {
-            if (cfg.contains("items")) {
-                handler.deserializeNBT(cfg.getCompound("items"));
-            } else {
-                handler.deserializeNBT(cfg);
-            }
-        }
+        CompoundTag cfg = WandNbt.getConfig(wand);
+        int selected = WandNbt.getSelectedSlot(cfg);
+        var handler = WandNbt.readInventory(cfg);
 
         ItemStack target = handler.getStackInSlot(selected);
         if (target == null || target.isEmpty()) {
             player.displayClientMessage(Component.translatable("message.meplacementtool.no_configured_item"), true);
             return InteractionResult.FAIL;
+        }
+
+        DirectionMode directionMode = DirectionMode.AUTO;
+        if (cfg != null && cfg.contains("DirectionMode")) {
+            directionMode = DirectionMode.fromId(cfg.getInt("DirectionMode"));
         }
 
         var storage = grid.getStorageService().getInventory();
@@ -191,85 +183,29 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                 var clickedFace = context.getClickedFace();
                 var clickedState = level.getBlockState(clickedPos);
 
-                // Use BFS to find all positions where fluid can be placed (same logic as block placement)
-                java.util.LinkedList<BlockPos> candidates = new java.util.LinkedList<>();
-                java.util.HashSet<BlockPos> allCandidates = new java.util.HashSet<>();
-                java.util.ArrayList<BlockPos> placePositions = new java.util.ArrayList<>();
-
-                BlockPos startingPoint = clickedPos.relative(clickedFace);
-                candidates.add(startingPoint);
-
-                // Limit max candidates explored to prevent infinite loop (performance fix)
-                final int MAX_CANDIDATES = placementCount * 10;
-
-                while (!candidates.isEmpty() && placePositions.size() < placementCount && allCandidates.size() < MAX_CANDIDATES) {
-                    BlockPos currentCandidate = candidates.removeFirst();
-                    if (!allCandidates.add(currentCandidate)) {
-                        continue;
-                    }
-
-                    BlockPos supportingPoint = currentCandidate.relative(clickedFace.getOpposite());
-                    var supportingState = level.getBlockState(supportingPoint);
-
-                    // Check if the supporting block matches the clicked block (same as block placement logic)
-                    if (supportingState.getBlock() == clickedState.getBlock()) {
-                        var stateAtPos = level.getBlockState(currentCandidate);
+                var placePositions = PlacementBfs.findPositions(
+                    clickedPos.relative(clickedFace), placementCount, clickedFace, directionMode,
+                    candidate -> {
+                        BlockPos supportingPoint = candidate.relative(clickedFace.getOpposite());
+                        return level.getBlockState(supportingPoint).getBlock() == clickedState.getBlock();
+                    },
+                    candidate -> {
+                        var stateAtPos = level.getBlockState(candidate);
                         boolean stateIsLegacy = stateAtPos == legacyBlock;
                         boolean stateIsAir = stateAtPos.isAir();
                         boolean canBeReplaced = false;
-                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Throwable ignored2) {}
+                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Exception ignored) {}
                         boolean isLiquidContainer = stateAtPos.getBlock() instanceof net.minecraft.world.level.block.LiquidBlockContainer;
                         boolean containerCanPlace = false;
                         if (isLiquidContainer) {
                             try {
                                 containerCanPlace = ((net.minecraft.world.level.block.LiquidBlockContainer) stateAtPos.getBlock())
-                                        .canPlaceLiquid(level, currentCandidate, stateAtPos, fluid);
-                            } catch (Throwable ignored2) {}
+                                        .canPlaceLiquid(level, candidate, stateAtPos, fluid);
+                            } catch (Exception ignored) {}
                         }
-
-                        boolean canPlace = !stateIsLegacy && !aeFluidKey.hasTag() && (stateIsAir || canBeReplaced || (isLiquidContainer && containerCanPlace));
-
-                        if (canPlace) {
-                            placePositions.add(currentCandidate);
-                            // Only expand candidates after successful placement (matches ConstructionWand behavior)
-                            switch (clickedFace) {
-                                case DOWN:
-                                case UP:
-                                    candidates.add(currentCandidate.north());
-                                    candidates.add(currentCandidate.south());
-                                    candidates.add(currentCandidate.east());
-                                    candidates.add(currentCandidate.west());
-                                    candidates.add(currentCandidate.north().east());
-                                    candidates.add(currentCandidate.north().west());
-                                    candidates.add(currentCandidate.south().east());
-                                    candidates.add(currentCandidate.south().west());
-                                    break;
-                                case NORTH:
-                                case SOUTH:
-                                    candidates.add(currentCandidate.east());
-                                    candidates.add(currentCandidate.west());
-                                    candidates.add(currentCandidate.above());
-                                    candidates.add(currentCandidate.below());
-                                    candidates.add(currentCandidate.above().east());
-                                    candidates.add(currentCandidate.above().west());
-                                    candidates.add(currentCandidate.below().east());
-                                    candidates.add(currentCandidate.below().west());
-                                    break;
-                                case EAST:
-                                case WEST:
-                                    candidates.add(currentCandidate.north());
-                                    candidates.add(currentCandidate.south());
-                                    candidates.add(currentCandidate.above());
-                                    candidates.add(currentCandidate.below());
-                                    candidates.add(currentCandidate.above().north());
-                                    candidates.add(currentCandidate.above().south());
-                                    candidates.add(currentCandidate.below().north());
-                                    candidates.add(currentCandidate.below().south());
-                                    break;
-                            }
-                        }
+                        return !stateIsLegacy && !aeFluidKey.hasTag() && (stateIsAir || canBeReplaced || (isLiquidContainer && containerCanPlace));
                     }
-                }
+                );
                 if (placePositions.isEmpty()) {
                     player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
                     return InteractionResult.sidedSuccess(false);
@@ -290,7 +226,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                         var stateAtPos = level.getBlockState(placePos);
                         boolean stateIsAir = stateAtPos.isAir();
                         boolean canBeReplaced = false;
-                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Throwable ignored2) {}
+                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Exception ignored) {}
                         boolean isLiquidContainer = stateAtPos.getBlock() instanceof net.minecraft.world.level.block.LiquidBlockContainer;
 
                         boolean success = false;
@@ -309,14 +245,14 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                         if (success) {
                             placedCount++;
                         }
-                    } catch (Throwable t) {
+                    } catch (Exception t) {
                         LOGGER.warn("Exception during fluid placement at {}", placePos, t);
                     }
                 }
 
                 if (placedCount > 0) {
                     long extracted = storage.extract(aeFluidKey, (long) placedCount * appeng.api.stacks.AEFluidKey.AMOUNT_BLOCK, appeng.api.config.Actionable.MODULATE, src);
-                    LOGGER.info("Consuming {} AE from wand for player {} (placedCount={})", ENERGY_COST * placedCount / placementCount, player.getName().getString(), placedCount);
+                    LOGGER.debug("Consuming {} AE from wand for player {} (placedCount={})", ENERGY_COST * placedCount / placementCount, player.getName().getString(), placedCount);
                     this.usePower(player, ENERGY_COST * placedCount / placementCount, wand);
                     level.playSound(null, clickedPos.relative(clickedFace), SoundEvents.BUCKET_EMPTY, SoundSource.BLOCKS, 1.0F, 1.0F);
                     return InteractionResult.sidedSuccess(false);
@@ -325,7 +261,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                     return InteractionResult.sidedSuccess(false);
                 }
             }
-        } catch (Throwable ignored) {}
+        } catch (Exception ignored) {}
 
         String fluidId = null;
         if (cfg != null && cfg.contains("fluids")) {
@@ -357,85 +293,29 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                 var clickedFace = context.getClickedFace();
                 var clickedState = level.getBlockState(clickedPos);
 
-                // Use BFS to find all positions where fluid can be placed (same logic as block placement)
-                java.util.LinkedList<BlockPos> candidates = new java.util.LinkedList<>();
-                java.util.HashSet<BlockPos> allCandidates = new java.util.HashSet<>();
-                java.util.ArrayList<BlockPos> placePositions = new java.util.ArrayList<>();
-
-                BlockPos startingPoint = clickedPos.relative(clickedFace);
-                candidates.add(startingPoint);
-
-                // Limit max candidates explored to prevent infinite loop (performance fix)
-                final int MAX_CANDIDATES = placementCount * 10;
-
-                while (!candidates.isEmpty() && placePositions.size() < placementCount && allCandidates.size() < MAX_CANDIDATES) {
-                    BlockPos currentCandidate = candidates.removeFirst();
-                    if (!allCandidates.add(currentCandidate)) {
-                        continue;
-                    }
-
-                    BlockPos supportingPoint = currentCandidate.relative(clickedFace.getOpposite());
-                    var supportingState = level.getBlockState(supportingPoint);
-
-                    // Check if the supporting block matches the clicked block (same as block placement logic)
-                    if (supportingState.getBlock() == clickedState.getBlock()) {
-                        var stateAtPos = level.getBlockState(currentCandidate);
+                var placePositions = PlacementBfs.findPositions(
+                    clickedPos.relative(clickedFace), placementCount, clickedFace, directionMode,
+                    candidate -> {
+                        BlockPos supportingPoint = candidate.relative(clickedFace.getOpposite());
+                        return level.getBlockState(supportingPoint).getBlock() == clickedState.getBlock();
+                    },
+                    candidate -> {
+                        var stateAtPos = level.getBlockState(candidate);
                         boolean stateIsLegacy = stateAtPos == legacyBlock;
                         boolean stateIsAir = stateAtPos.isAir();
                         boolean canBeReplaced = false;
-                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Throwable ignored2) {}
+                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Exception ignored) {}
                         boolean isLiquidContainer = stateAtPos.getBlock() instanceof net.minecraft.world.level.block.LiquidBlockContainer;
                         boolean containerCanPlace = false;
                         if (isLiquidContainer) {
                             try {
                                 containerCanPlace = ((net.minecraft.world.level.block.LiquidBlockContainer) stateAtPos.getBlock())
-                                        .canPlaceLiquid(level, currentCandidate, stateAtPos, fluid);
-                            } catch (Throwable ignored2) {}
+                                        .canPlaceLiquid(level, candidate, stateAtPos, fluid);
+                            } catch (Exception ignored) {}
                         }
-
-                        boolean canPlace = !stateIsLegacy && !aeFluidKey.hasTag() && (stateIsAir || canBeReplaced || (isLiquidContainer && containerCanPlace));
-
-                        if (canPlace) {
-                            placePositions.add(currentCandidate);
-                            // Only expand candidates after successful placement (matches ConstructionWand behavior)
-                            switch (clickedFace) {
-                                case DOWN:
-                                case UP:
-                                    candidates.add(currentCandidate.north());
-                                    candidates.add(currentCandidate.south());
-                                    candidates.add(currentCandidate.east());
-                                    candidates.add(currentCandidate.west());
-                                    candidates.add(currentCandidate.north().east());
-                                    candidates.add(currentCandidate.north().west());
-                                    candidates.add(currentCandidate.south().east());
-                                    candidates.add(currentCandidate.south().west());
-                                    break;
-                                case NORTH:
-                                case SOUTH:
-                                    candidates.add(currentCandidate.east());
-                                    candidates.add(currentCandidate.west());
-                                    candidates.add(currentCandidate.above());
-                                    candidates.add(currentCandidate.below());
-                                    candidates.add(currentCandidate.above().east());
-                                    candidates.add(currentCandidate.above().west());
-                                    candidates.add(currentCandidate.below().east());
-                                    candidates.add(currentCandidate.below().west());
-                                    break;
-                                case EAST:
-                                case WEST:
-                                    candidates.add(currentCandidate.north());
-                                    candidates.add(currentCandidate.south());
-                                    candidates.add(currentCandidate.above());
-                                    candidates.add(currentCandidate.below());
-                                    candidates.add(currentCandidate.above().north());
-                                    candidates.add(currentCandidate.above().south());
-                                    candidates.add(currentCandidate.below().north());
-                                    candidates.add(currentCandidate.below().south());
-                                    break;
-                            }
-                        }
+                        return !stateIsLegacy && !aeFluidKey.hasTag() && (stateIsAir || canBeReplaced || (isLiquidContainer && containerCanPlace));
                     }
-                }
+                );
                 if (placePositions.isEmpty()) {
                     player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
                     return InteractionResult.sidedSuccess(false);
@@ -456,7 +336,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                         var stateAtPos = level.getBlockState(placePos);
                         boolean stateIsAir = stateAtPos.isAir();
                         boolean canBeReplaced = false;
-                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Throwable ignored2) {}
+                        try { canBeReplaced = stateAtPos.canBeReplaced(fluid); } catch (Exception ignored) {}
                         boolean isLiquidContainer = stateAtPos.getBlock() instanceof net.minecraft.world.level.block.LiquidBlockContainer;
 
                         boolean success = false;
@@ -475,7 +355,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                         if (success) {
                             placedCount++;
                         }
-                    } catch (Throwable t) {
+                    } catch (Exception t) {
                         LOGGER.warn("Exception during fluid placement at {}", placePos, t);
                     }
                 }
@@ -489,7 +369,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                     player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
                     return InteractionResult.sidedSuccess(false);
                 }
-            } catch (Throwable t) {
+            } catch (Exception t) {
                 LOGGER.warn("Exception during fluid placement for player {} at {}", player.getName().getString(), context.getClickedPos(), t);
             }
         }
@@ -529,6 +409,113 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
         }
 
         var blockItem = target.getItem();
+        if (blockItem instanceof IPartItem<?>) {
+            var firstPlacement = getPartPlacementWithCableFallback(player, level, target, context.getClickedPos(),
+                    context.getClickedFace(), context.getClickLocation());
+            if (firstPlacement == null) {
+                player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
+                return InteractionResult.sidedSuccess(false);
+            }
+
+            BlockPos clickedPos = context.getClickedPos();
+            var clickedState = level.getBlockState(clickedPos);
+            Direction partSide = firstPlacement.side();
+            boolean placingOnClickedHost = firstPlacement.pos().equals(clickedPos);
+
+            var placePositions = PlacementBfs.findPositions(
+                firstPlacement.pos(), placementCount, context.getClickedFace(), directionMode,
+                candidate -> {
+                    if (placingOnClickedHost) {
+                        return level.getBlockState(candidate).getBlock() == clickedState.getBlock();
+                    } else {
+                        return level.getBlockState(candidate.relative(partSide)).getBlock() == clickedState.getBlock();
+                    }
+                },
+                candidate -> canPlaceConfiguredPartOnCable(player, level, target, candidate, partSide)
+            );
+
+            if (placePositions.isEmpty()) {
+                player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
+                return InteractionResult.sidedSuccess(false);
+            }
+
+            int placedCount = 0;
+            List<UndoHistory.PlacementSnapshot> placedSnapshots = new ArrayList<>();
+            java.util.Map<appeng.api.stacks.AEItemKey, Long> extractionMap = new java.util.LinkedHashMap<>();
+            java.util.List<java.util.Map.Entry<appeng.api.stacks.AEItemKey, Long>> availableKeys = new java.util.ArrayList<>();
+            for (var entry : matchingKeys) {
+                availableKeys.add(new java.util.AbstractMap.SimpleEntry<>(entry.getKey(), entry.getValue()));
+            }
+
+            for (BlockPos placePos : placePositions) {
+                appeng.api.stacks.AEItemKey currentKey = null;
+                for (var entry : availableKeys) {
+                    if (entry.getValue() > 0) {
+                        currentKey = entry.getKey();
+                        entry.setValue(entry.getValue() - 1);
+                        break;
+                    }
+                }
+
+                if (currentKey == null) {
+                    break;
+                }
+
+                var placeStack = currentKey.toStack(1);
+                if (!(placeStack.getItem() instanceof IPartItem<?> partItem)) {
+                    continue;
+                }
+
+                if (placePart(player, level, placePos, partSide, partItem, placeStack)) {
+                    placedCount++;
+                    placedSnapshots.add(new UndoHistory.PartPlacementSnapshot(placePos, partSide, currentKey));
+                    extractionMap.merge(currentKey, 1L, Long::sum);
+                }
+            }
+
+            if (placedCount == 0) {
+                player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
+                return InteractionResult.sidedSuccess(false);
+            }
+
+            long totalExtracted = 0;
+            for (var entry : extractionMap.entrySet()) {
+                long extracted = storage.extract(entry.getKey(), entry.getValue(), appeng.api.config.Actionable.MODULATE, src);
+                totalExtracted += extracted;
+            }
+
+            if (totalExtracted <= 0) {
+                player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
+                return InteractionResult.sidedSuccess(false);
+            }
+
+            boolean configApplied = false;
+            if (MemoryCardHelper.hasConfiguredMemoryCard(player)) {
+                boolean firstPart = true;
+                for (UndoHistory.PlacementSnapshot snapshot : placedSnapshots) {
+                    var host = appeng.api.parts.PartHelper.getPartHost(level, snapshot.pos);
+                    if (host != null && MemoryCardHelper.applyMemoryCardToPart(player, host.getPart(partSide), firstPart, grid)) {
+                        configApplied = true;
+                    }
+                    firstPart = false;
+                }
+            }
+
+            MEPlacementToolMod.instance.undoHistory.add(player, level, placedSnapshots, configApplied);
+
+            LOGGER.debug("Consuming {} AE from wand for player {} (placedCount={})", ENERGY_COST * placedCount / placementCount, player.getName().getString(), placedCount);
+            this.usePower(player, ENERGY_COST * placedCount / placementCount, wand);
+            if (!placedSnapshots.isEmpty()) {
+                BlockPos soundPos = placedSnapshots.get(0).pos;
+                var placedState = level.getBlockState(soundPos);
+                var soundType = placedState.getSoundType(level, soundPos, player);
+                level.playSound(null, soundPos, soundType.getPlaceSound(), SoundSource.BLOCKS,
+                    (soundType.getVolume() + 1.0F) / 2.0F, soundType.getPitch() * 0.8F);
+            }
+
+            return InteractionResult.sidedSuccess(false);
+        }
+
         if (!(blockItem instanceof BlockItem)) {
             player.displayClientMessage(Component.translatable("message.meplacementtool.unsupported_target"), true);
             return InteractionResult.FAIL;
@@ -539,79 +526,24 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
         var clickedFace = context.getClickedFace();
         var clickedState = level.getBlockState(clickedPos);
 
-        java.util.LinkedList<BlockPos> candidates = new java.util.LinkedList<>();
-        java.util.HashSet<BlockPos> allCandidates = new java.util.HashSet<>();
-        java.util.ArrayList<BlockPos> placePositions = new java.util.ArrayList<>();
-
-        BlockPos startingPoint = clickedPos.relative(clickedFace);
-        candidates.add(startingPoint);
-
-        // Limit max candidates explored to prevent infinite loop (performance fix)
-        final int MAX_CANDIDATES = placementCount * 10;
-
-        while (!candidates.isEmpty() && placePositions.size() < placementCount && allCandidates.size() < MAX_CANDIDATES) {
-            BlockPos currentCandidate = candidates.removeFirst();
-            if (!allCandidates.add(currentCandidate)) {
-                continue;
-            }
-
-            BlockPos supportingPoint = currentCandidate.relative(clickedFace.getOpposite());
-            var supportingState = level.getBlockState(supportingPoint);
-
-            if (supportingState.getBlock() == clickedState.getBlock()) {
-                var currentState = level.getBlockState(currentCandidate);
-                boolean canPlace = level.isEmptyBlock(currentCandidate);
+        var placePositions = PlacementBfs.findPositions(
+            clickedPos.relative(clickedFace), placementCount, clickedFace, directionMode,
+            candidate -> level.getBlockState(candidate.relative(clickedFace.getOpposite())).getBlock() == clickedState.getBlock(),
+            candidate -> {
+                boolean canPlace = level.isEmptyBlock(candidate);
                 if (!canPlace) {
                     try {
                         BlockPlaceContext checkContext = new BlockPlaceContext(new net.minecraft.world.item.context.UseOnContext(
                             player, context.getHand(), new net.minecraft.world.phys.BlockHitResult(
-                                context.getClickLocation(), context.getClickedFace(), currentCandidate, context.isInside()
+                                context.getClickLocation(), context.getClickedFace(), candidate, context.isInside()
                             )
                         ));
-                        canPlace = currentState.canBeReplaced(checkContext);
-                    } catch (Throwable t) {}
+                        canPlace = level.getBlockState(candidate).canBeReplaced(checkContext);
+                    } catch (Exception ignored) {}
                 }
-                if (canPlace) {
-                    placePositions.add(currentCandidate);
-                    // Only expand candidates after successful placement (matches ConstructionWand behavior)
-                    switch (clickedFace) {
-                        case DOWN:
-                        case UP:
-                            candidates.add(currentCandidate.north());
-                            candidates.add(currentCandidate.south());
-                            candidates.add(currentCandidate.east());
-                            candidates.add(currentCandidate.west());
-                            candidates.add(currentCandidate.north().east());
-                            candidates.add(currentCandidate.north().west());
-                            candidates.add(currentCandidate.south().east());
-                            candidates.add(currentCandidate.south().west());
-                            break;
-                        case NORTH:
-                        case SOUTH:
-                            candidates.add(currentCandidate.east());
-                            candidates.add(currentCandidate.west());
-                            candidates.add(currentCandidate.above());
-                            candidates.add(currentCandidate.below());
-                            candidates.add(currentCandidate.above().east());
-                            candidates.add(currentCandidate.above().west());
-                            candidates.add(currentCandidate.below().east());
-                            candidates.add(currentCandidate.below().west());
-                            break;
-                        case EAST:
-                        case WEST:
-                            candidates.add(currentCandidate.north());
-                            candidates.add(currentCandidate.south());
-                            candidates.add(currentCandidate.above());
-                            candidates.add(currentCandidate.below());
-                            candidates.add(currentCandidate.above().north());
-                            candidates.add(currentCandidate.above().south());
-                            candidates.add(currentCandidate.below().north());
-                            candidates.add(currentCandidate.below().south());
-                            break;
-                    }
-                }
+                return canPlace;
             }
-        }
+        );
 
         if (placePositions.isEmpty()) {
             player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
@@ -679,7 +611,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                     // Track extraction
                     extractionMap.merge(currentKey, 1L, Long::sum);
                 }
-            } catch (Throwable t) {
+            } catch (Exception t) {
                 LOGGER.warn("Exception during placement attempt for player {} at {}", player.getName().getString(), placePos, t);
             } finally {
                 player.setItemInHand(InteractionHand.MAIN_HAND, origMain);
@@ -732,7 +664,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
         // Add to undo history, marking as non-undoable if config was applied
         MEPlacementToolMod.instance.undoHistory.add(player, level, placedSnapshots, configApplied);
 
-        LOGGER.info("Consuming {} AE from wand for player {} (placedCount={})", ENERGY_COST * placedCount / placementCount, player.getName().getString(), placedCount);
+        LOGGER.debug("Consuming {} AE from wand for player {} (placedCount={})", ENERGY_COST * placedCount / placementCount, player.getName().getString(), placedCount);
         this.usePower(player, ENERGY_COST * placedCount / placementCount, wand);
         // Play the block's own placement sound (use first placed position)
         if (!placedSnapshots.isEmpty()) {
@@ -746,6 +678,46 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
         return InteractionResult.sidedSuccess(false);
     }
 
+    private boolean canPlaceConfiguredPartOnCable(Player player, Level level, ItemStack partStack, BlockPos pos,
+            Direction side) {
+        if (side != null && !hasCenterCable(level, pos)) {
+            return false;
+        }
+        return PartPlacement.canPlacePartOnBlock(player, level, partStack, pos, side);
+    }
+
+    private boolean hasCenterCable(Level level, BlockPos pos) {
+        var host = PartHelper.getPartHost(level, pos);
+        return host != null && host.getPart(null) != null;
+    }
+
+    private PartPlacement.Placement getPartPlacementWithCableFallback(Player player, Level level, ItemStack partStack,
+            BlockPos clickedPos, Direction clickedFace, net.minecraft.world.phys.Vec3 clickLocation) {
+        var placement = PartPlacement.getPartPlacement(player, level, partStack, clickedPos, clickedFace, clickLocation);
+        if (placement != null) {
+            return placement;
+        }
+
+        var host = PartHelper.getPartHost(level, clickedPos);
+        if (host != null && host.getPart(null) != null && host.canAddPart(partStack, clickedFace)) {
+            return new PartPlacement.Placement(clickedPos, clickedFace);
+        }
+
+        return null;
+    }
+
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private boolean placePart(Player player, Level level, BlockPos pos, Direction side, IPartItem<?> partItem,
+            ItemStack partStack) {
+        try {
+            return PartPlacement.placePart(player, level, (IPartItem) partItem, partStack.getTag(), pos, side) != null;
+        } catch (Exception t) {
+            LOGGER.warn("Exception during part placement attempt for player {} at {}", player.getName().getString(), pos, t);
+            return false;
+        }
+    }
+
+
     @Override
     public InteractionResultHolder<ItemStack> use(Level level, Player player, InteractionHand hand) {
         ItemStack wand = player.getItemInHand(hand);
@@ -756,17 +728,9 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
         }
 
         if (!level.isClientSide() && player instanceof ServerPlayer serverPlayer) {
-            CompoundTag data = wand.getOrCreateTag();
-            CompoundTag cfg = data.contains(WandMenu.TAG_KEY) ? data.getCompound(WandMenu.TAG_KEY) : null;
+            CompoundTag cfg = WandNbt.getConfig(wand);
 
-            var handler = new ItemStackHandler(18);
-            if (cfg != null) {
-                if (cfg.contains("items")) {
-                    handler.deserializeNBT(cfg.getCompound("items"));
-                } else {
-                    handler.deserializeNBT(cfg);
-                }
-            }
+            var handler = WandNbt.readInventory(cfg);
 
             NetworkHooks.openScreen(serverPlayer,
                 new SimpleMenuProvider((wnd, inv, pl) -> new WandMenu(wnd, inv, handler), Component.empty()),

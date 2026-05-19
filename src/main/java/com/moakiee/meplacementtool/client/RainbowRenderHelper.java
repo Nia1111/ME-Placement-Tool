@@ -28,50 +28,52 @@ public class RainbowRenderHelper {
     
     // Time-based animation speed (full cycle every ~3 seconds for smoother feel)
     private static final float CYCLE_DURATION_MS = 3000.0f;  // 3 seconds per full rainbow cycle
-    
+
+    // Reused output buffer for the rainbow color. Single render thread; do not mutate the returned array.
+    private static final float[] CACHED_COLOR = new float[3];
+    private static long lastColorTimeMs = Long.MIN_VALUE;
+
     /**
      * Get rainbow color based on current time using HSV to RGB conversion.
      * Uses full 8-bit color depth (256 hue steps) for ultra-smooth transitions.
-     * 
-     * @return float array {red, green, blue} in range 0-1
+     *
+     * @return float array {red, green, blue} in range 0-1. The array is reused across calls; callers must not mutate it.
      */
     public static float[] getTimeBasedRainbowColor() {
-        // Get current time and calculate hue (0-1 range, full cycle)
-        float time = (System.currentTimeMillis() % (long)CYCLE_DURATION_MS) / CYCLE_DURATION_MS;
-        
-        // Convert hue to RGB using HSV (Saturation=1, Value=1)
-        return hsvToRgb(time, 1.0f, 1.0f);
+        long now = System.currentTimeMillis();
+        if (now != lastColorTimeMs) {
+            float time = (now % (long)CYCLE_DURATION_MS) / CYCLE_DURATION_MS;
+            hsvToRgb(time, 1.0f, 1.0f, CACHED_COLOR);
+            lastColorTimeMs = now;
+        }
+        return CACHED_COLOR;
     }
-    
+
     /**
-     * Convert HSV (Hue, Saturation, Value) to RGB.
+     * Convert HSV (Hue, Saturation, Value) to RGB, writing into {@code out}.
      * This provides smooth 8-bit color transitions through the full rainbow spectrum.
-     * 
+     *
      * @param h Hue (0-1, where 0=red, 0.33=green, 0.66=blue, 1=red)
      * @param s Saturation (0-1)
      * @param v Value/Brightness (0-1)
-     * @return float array {r, g, b} in range 0-1
+     * @param out output array of length >= 3, receives r, g, b in range 0-1
      */
-    private static float[] hsvToRgb(float h, float s, float v) {
-        float r, g, b;
-        
+    private static void hsvToRgb(float h, float s, float v, float[] out) {
         int i = (int)(h * 6);
         float f = h * 6 - i;
         float p = v * (1 - s);
         float q = v * (1 - f * s);
         float t = v * (1 - (1 - f) * s);
-        
+
         switch (i % 6) {
-            case 0: r = v; g = t; b = p; break;
-            case 1: r = q; g = v; b = p; break;
-            case 2: r = p; g = v; b = t; break;
-            case 3: r = p; g = q; b = v; break;
-            case 4: r = t; g = p; b = v; break;
-            case 5: r = v; g = p; b = q; break;
-            default: r = v; g = t; b = p; break;
+            case 0: out[0] = v; out[1] = t; out[2] = p; break;
+            case 1: out[0] = q; out[1] = v; out[2] = p; break;
+            case 2: out[0] = p; out[1] = v; out[2] = t; break;
+            case 3: out[0] = p; out[1] = q; out[2] = v; break;
+            case 4: out[0] = t; out[1] = p; out[2] = v; break;
+            case 5: out[0] = v; out[1] = p; out[2] = q; break;
+            default: out[0] = v; out[1] = t; out[2] = p; break;
         }
-        
-        return new float[] {r, g, b};
     }
     
     /**

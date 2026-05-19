@@ -10,8 +10,6 @@ import appeng.api.parts.IPartItem;
 import appeng.api.parts.PartHelper;
 import appeng.api.stacks.AEKey;
 import appeng.helpers.IMouseWheelItem;
-import appeng.menu.locator.MenuLocators;
-import appeng.menu.me.crafting.CraftAmountMenu;
 import appeng.parts.PartPlacement;
 import appeng.api.stacks.AEItemKey;
 import appeng.api.storage.MEStorage;
@@ -134,13 +132,30 @@ public class ItemMECablePlacementTool extends BasePlacementToolItem implements I
         DENSE_SMART(AEParts.SMART_DENSE_CABLE);
 
         private final ColoredItemDefinition<?> definition;
+        private final java.util.Map<AEItemKey, AEColor> colorLookup;
 
         CableType(ColoredItemDefinition<?> definition) {
             this.definition = definition;
+            var map = new java.util.LinkedHashMap<AEItemKey, AEColor>();
+            for (AEColor c : AEColor.values()) {
+                AEItemKey key = AEItemKey.of(definition.stack(c));
+                if (key != null) {
+                    map.put(key, c);
+                }
+            }
+            this.colorLookup = java.util.Collections.unmodifiableMap(map);
         }
 
         public ItemStack getStack(AEColor color) {
             return definition.stack(color);
+        }
+
+        public AEColor getColorFromKey(AEItemKey key) {
+            return colorLookup.getOrDefault(key, AEColor.TRANSPARENT);
+        }
+
+        public java.util.Map<AEItemKey, AEColor> getColorLookup() {
+            return colorLookup;
         }
     }
 
@@ -282,12 +297,10 @@ public class ItemMECablePlacementTool extends BasePlacementToolItem implements I
         }
         
         // Second try: any other color
-        for (AEColor c : AEColor.values()) {
-            if (c == preferredColor) continue;
-            ItemStack stack = cableType.getStack(c);
-            AEItemKey key = AEItemKey.of(stack);
-            if (storage.extract(key, 1, Actionable.SIMULATE, src) >= 1) {
-                return key;
+        for (var entry : cableType.getColorLookup().entrySet()) {
+            if (entry.getValue() == preferredColor) continue;
+            if (storage.extract(entry.getKey(), 1, Actionable.SIMULATE, src) >= 1) {
+                return entry.getKey();
             }
         }
         
@@ -298,13 +311,7 @@ public class ItemMECablePlacementTool extends BasePlacementToolItem implements I
      * Get the AEColor from a cable AEItemKey.
      */
     private AEColor getColorFromCableKey(AEItemKey key, CableType cableType) {
-        for (AEColor c : AEColor.values()) {
-            ItemStack stack = cableType.getStack(c);
-            if (AEItemKey.of(stack).equals(key)) {
-                return c;
-            }
-        }
-        return AEColor.TRANSPARENT;
+        return cableType.getColorFromKey(key);
     }
 
     /**
@@ -359,10 +366,8 @@ public class ItemMECablePlacementTool extends BasePlacementToolItem implements I
         
         // Pre-check: Count total available cables in network (any color of this type)
         long totalAvailable = 0;
-        for (AEColor c : AEColor.values()) {
-            ItemStack stack = cableType.getStack(c);
-            AEItemKey key = AEItemKey.of(stack);
-            totalAvailable += storage.extract(key, totalNeeded, Actionable.SIMULATE, src);
+        for (var entry : cableType.getColorLookup().entrySet()) {
+            totalAvailable += storage.extract(entry.getKey(), totalNeeded, Actionable.SIMULATE, src);
             if (totalAvailable >= totalNeeded) break; // Enough found
         }
         
@@ -503,10 +508,8 @@ public class ItemMECablePlacementTool extends BasePlacementToolItem implements I
         
         // Pre-check: Count total available cables in network (any color of this type)
         long totalAvailable = 0;
-        for (AEColor c : AEColor.values()) {
-            ItemStack stack = cableType.getStack(c);
-            AEItemKey key = AEItemKey.of(stack);
-            totalAvailable += storage.extract(key, totalNeeded, Actionable.SIMULATE, src);
+        for (var entry : cableType.getColorLookup().entrySet()) {
+            totalAvailable += storage.extract(entry.getKey(), totalNeeded, Actionable.SIMULATE, src);
             if (totalAvailable >= totalNeeded) break; // Enough found
         }
         
@@ -824,10 +827,12 @@ public class ItemMECablePlacementTool extends BasePlacementToolItem implements I
         stack.getOrCreateTag().putInt("CableType", type.ordinal());
     }
 
+    private static final AEColor[] COLOR_VALUES = AEColor.values();
+
     public static AEColor getColor(ItemStack stack) {
         CompoundTag tag = stack.getTag();
         if (tag != null && tag.contains("Color")) {
-            return AEColor.values()[tag.getInt("Color")];
+            return COLOR_VALUES[tag.getInt("Color")];
         }
         return AEColor.TRANSPARENT;
     }
@@ -837,8 +842,8 @@ public class ItemMECablePlacementTool extends BasePlacementToolItem implements I
         AEColor current = getColor(stack);
         // If has upgrade, cycle through all colors
         if(hasUpgrade(stack)) {
-            int nextOrdinal = ((current.ordinal() + offset) + AEColor.values().length) % AEColor.values().length;
-            AEColor next = AEColor.values()[nextOrdinal];
+            int nextOrdinal = ((current.ordinal() + offset) + COLOR_VALUES.length) % COLOR_VALUES.length;
+            AEColor next = COLOR_VALUES[nextOrdinal];
             setColor(stack, next);
             return next;
         } else {
@@ -900,34 +905,6 @@ public class ItemMECablePlacementTool extends BasePlacementToolItem implements I
             return AEColor.fromDye(dyeItem.getDyeColor());
         }
         return null;
-    }
-
-    /**
-     * Open the crafting menu for an item that can be crafted.
-     * @param amount The amount to pre-fill in the crafting request
-     */
-    private void openCraftingMenu(ServerPlayer player, ItemStack tool, AEKey whatToCraft, int amount) {
-        int toolSlot = findInventorySlot(player, tool);
-        if (toolSlot >= 0) {
-            CraftAmountMenu.open(player, MenuLocators.forInventorySlot(toolSlot), whatToCraft, amount);
-        } else if (player.getMainHandItem() == tool) {
-            CraftAmountMenu.open(player, MenuLocators.forHand(player, InteractionHand.MAIN_HAND), whatToCraft, amount);
-        } else if (player.getOffhandItem() == tool) {
-            CraftAmountMenu.open(player, MenuLocators.forHand(player, InteractionHand.OFF_HAND), whatToCraft, amount);
-        }
-    }
-
-    /**
-     * Find the inventory slot containing the given item stack.
-     */
-    private int findInventorySlot(Player player, ItemStack itemStack) {
-        var inv = player.getInventory();
-        for (int i = 0; i < inv.getContainerSize(); i++) {
-            if (inv.getItem(i) == itemStack) {
-                return i;
-            }
-        }
-        return -1;
     }
 
     private ColorLogicResult determineColorLogic(Player player, ItemStack tool) {

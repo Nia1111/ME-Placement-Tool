@@ -4,7 +4,7 @@ import com.moakiee.meplacementtool.ClientConfig;
 import com.moakiee.meplacementtool.ItemMECablePlacementTool;
 import com.moakiee.meplacementtool.ItemMEPlacementTool;
 import com.moakiee.meplacementtool.ItemMultiblockPlacementTool;
-import com.moakiee.meplacementtool.WandMenu;
+import com.moakiee.meplacementtool.WandNbt;
 import net.minecraft.client.Minecraft;
 import net.minecraft.client.gui.GuiGraphics;
 import net.minecraft.nbt.CompoundTag;
@@ -17,7 +17,7 @@ import net.minecraftforge.api.distmarker.OnlyIn;
 import net.minecraftforge.client.event.RenderGuiOverlayEvent;
 import net.minecraftforge.client.gui.overlay.VanillaGuiOverlay;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
-import net.minecraftforge.items.ItemStackHandler;
+
 
 import java.util.ArrayList;
 import java.util.List;
@@ -67,15 +67,11 @@ public class ToolInfoHudRenderer {
         // Determine current tool item
         Item currentToolItem = null;
         ItemStack currentToolStack = ItemStack.EMPTY;
-        
-        if (mainHand.getItem() instanceof ItemMEPlacementTool ||
-            mainHand.getItem() instanceof ItemMultiblockPlacementTool ||
-            mainHand.getItem() instanceof ItemMECablePlacementTool) {
+
+        if (isPlacementTool(mainHand.getItem())) {
             currentToolItem = mainHand.getItem();
             currentToolStack = mainHand;
-        } else if (offHand.getItem() instanceof ItemMEPlacementTool ||
-                   offHand.getItem() instanceof ItemMultiblockPlacementTool ||
-                   offHand.getItem() instanceof ItemMECablePlacementTool) {
+        } else if (isPlacementTool(offHand.getItem())) {
             currentToolItem = offHand.getItem();
             currentToolStack = offHand;
         }
@@ -124,21 +120,13 @@ public class ToolInfoHudRenderer {
      * Collect information for ME Placement Tool.
      */
     private void collectMEPlacementToolInfo(ItemStack tool, List<String> lines) {
-        CompoundTag data = tool.getTag();
-        if (data == null || !data.contains(WandMenu.TAG_KEY)) {
+        CompoundTag cfg = WandNbt.getConfig(tool);
+        if (cfg == null) {
             return;
         }
 
-        CompoundTag cfg = data.getCompound(WandMenu.TAG_KEY);
-        int selected = cfg.contains("SelectedSlot") ? cfg.getInt("SelectedSlot") : 0;
-        if (selected < 0 || selected >= 18) selected = 0;
-
-        ItemStackHandler handler = new ItemStackHandler(18);
-        if (cfg.contains("items")) {
-            handler.deserializeNBT(cfg.getCompound("items"));
-        } else {
-            handler.deserializeNBT(cfg);
-        }
+        int selected = WandNbt.getSelectedSlot(cfg);
+        var handler = WandNbt.readInventory(cfg);
 
         ItemStack target = handler.getStackInSlot(selected);
         if (target != null && !target.isEmpty()) {
@@ -157,6 +145,11 @@ public class ToolInfoHudRenderer {
         // Add placement count
         int placementCount = ItemMultiblockPlacementTool.getPlacementCount(tool);
         lines.add(Component.translatable("meplacementtool.hud.placement_count", placementCount).getString());
+
+        // Add direction mode
+        ItemMultiblockPlacementTool.DirectionMode direction = ItemMultiblockPlacementTool.getDirectionMode(tool);
+        String directionName = Component.translatable(direction.translationKey()).getString();
+        lines.add(Component.translatable("meplacementtool.hud.direction", directionName).getString());
     }
 
     /**
@@ -232,9 +225,12 @@ public class ToolInfoHudRenderer {
         };
     }
 
-    /**
-     * Render HUD lines on the right side of the crosshair with small font.
-     */
+    private static boolean isPlacementTool(Item item) {
+        return item instanceof ItemMEPlacementTool
+            || item instanceof ItemMultiblockPlacementTool
+            || item instanceof ItemMECablePlacementTool;
+    }
+
     private void renderHudLines(GuiGraphics guiGraphics, Minecraft mc, List<String> lines) {
         int screenWidth = mc.getWindow().getGuiScaledWidth();
         int screenHeight = mc.getWindow().getGuiScaledHeight();
