@@ -14,7 +14,7 @@ item_ids:
 
 <ItemImage id="meplacementtool:me_cable_placement_tool" scale="4" />
 
-MEケーブル設置ツールは、多彩な種類や色のケーブルと複数の設置モードに対応し、素早い配線を可能にします。
+MEケーブル設置ツールは、様々な種類や色のケーブルと複数の設置モードに対応し、素早い配線を可能にします。
 
 ## 特徴
 
