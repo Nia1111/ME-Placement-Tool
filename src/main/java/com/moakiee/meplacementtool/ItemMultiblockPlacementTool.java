@@ -52,6 +52,34 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
     private static final Logger LOGGER = LogUtils.getLogger();
     private static final int[] PLACEMENT_COUNTS = {1, 8, 64, 256, 1024};
 
+    /**
+     * Placement direction modes for bulk placement.
+     * AUTO uses BFS across the face plane. NORTH_SOUTH / EAST_WEST / VERTICAL
+     * constrain expansion to a single axis, producing a free-form line even
+     * in air. Inspired by ConstructionWand's LOCK options.
+     */
+    public enum DirectionMode {
+        AUTO,
+        NORTH_SOUTH,
+        EAST_WEST,
+        VERTICAL;
+
+        public static DirectionMode fromId(int id) {
+            DirectionMode[] values = values();
+            if (id < 0 || id >= values.length) return AUTO;
+            return values[id];
+        }
+
+        public DirectionMode next() {
+            DirectionMode[] values = values();
+            return values[(ordinal() + 1) % values.length];
+        }
+
+        public String translationKey() {
+            return "meplacementtool.direction." + name().toLowerCase(java.util.Locale.ROOT);
+        }
+    }
+
     public ItemMultiblockPlacementTool(Item.Properties props) {
         super(() -> Config.multiblockPlacementToolEnergyCapacity, props);
     }
@@ -96,13 +124,21 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
         int current = getPlacementCount(stack);
         for (int i = 0; i < PLACEMENT_COUNTS.length; i++) {
             if (PLACEMENT_COUNTS[i] == current) {
-                int nextIndex = forward 
-                        ? (i + 1) % PLACEMENT_COUNTS.length 
+                int nextIndex = forward
+                        ? (i + 1) % PLACEMENT_COUNTS.length
                         : (i - 1 + PLACEMENT_COUNTS.length) % PLACEMENT_COUNTS.length;
                 return PLACEMENT_COUNTS[nextIndex];
             }
         }
         return PLACEMENT_COUNTS[0];
+    }
+
+    public static DirectionMode getDirectionMode(ItemStack stack) {
+        CompoundTag cfg = stack.get(ModDataComponents.PLACEMENT_CONFIG.get());
+        if (cfg != null && cfg.contains("DirectionMode")) {
+            return DirectionMode.fromId(cfg.getInt("DirectionMode"));
+        }
+        return DirectionMode.AUTO;
     }
 
     @Override
@@ -154,6 +190,8 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
             return InteractionResult.FAIL;
         }
 
+        DirectionMode directionMode = DirectionMode.fromId(cfg.getInt("DirectionMode"));
+
         var storage = grid.getStorageService().getInventory();
         var src = new PlayerSource(player);
 
@@ -161,15 +199,15 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
         try {
             var unwrapped = GenericStack.unwrapItemStack(target);
             if (unwrapped != null && AEFluidKey.is(unwrapped.what())) {
-                return handleFluidMultiPlacement(context, player, wand, storage, src, 
-                        (AEFluidKey) unwrapped.what(), placementCount, ENERGY_COST);
+                return handleFluidMultiPlacement(context, player, wand, storage, src,
+                        (AEFluidKey) unwrapped.what(), placementCount, ENERGY_COST, directionMode);
             }
         } catch (Throwable ignored) {}
 
         // Check fluid in fluids config
         String fluidId = getFluidFromConfig(cfg, selected);
         if (fluidId != null) {
-            return handleFluidIdMultiPlacement(context, player, wand, storage, src, fluidId, placementCount, ENERGY_COST);
+            return handleFluidIdMultiPlacement(context, player, wand, storage, src, fluidId, placementCount, ENERGY_COST, directionMode);
         }
 
         // Block placement - find all matching keys (respects NBT whitelist config)
@@ -200,8 +238,8 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
         var clickedFace = context.getClickedFace();
         var clickedState = level.getBlockState(clickedPos);
 
-        // BFS to find all placement positions
-        List<BlockPos> placePositions = calculatePlacementPositions(player, level, clickedPos, clickedFace, clickedState, placementCount);
+        // Generate placement positions (BFS or axis-locked based on mode)
+        List<BlockPos> placePositions = calculatePlacementPositions(player, level, clickedPos, clickedFace, clickedState, placementCount, directionMode);
 
         if (placePositions.isEmpty()) {
             player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
@@ -359,9 +397,9 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
         return InteractionResult.sidedSuccess(false);
     }
 
-    private List<BlockPos> calculatePlacementPositions(Player player, Level level, BlockPos clickedPos, 
-            net.minecraft.core.Direction clickedFace, net.minecraft.world.level.block.state.BlockState clickedState, 
-            int maxCount) {
+    private List<BlockPos> calculatePlacementPositions(Player player, Level level, BlockPos clickedPos,
+            net.minecraft.core.Direction clickedFace, net.minecraft.world.level.block.state.BlockState clickedState,
+            int maxCount, DirectionMode directionMode) {
         LinkedList<BlockPos> candidates = new LinkedList<>();
         HashSet<BlockPos> allCandidates = new HashSet<>();
         ArrayList<BlockPos> placePositions = new ArrayList<>();
@@ -378,6 +416,8 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                 continue;
             }
 
+            // Mirrors ConstructionWand: even when a direction lock is active, the block "behind"
+            // the candidate (along the opposite of the clicked face) must match the clicked block.
             BlockPos supportingPoint = currentCandidate.relative(clickedFace.getOpposite());
             var supportingState = level.getBlockState(supportingPoint);
 
@@ -397,7 +437,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                 if (canPlace) {
                     placePositions.add(currentCandidate);
                     // Only expand candidates after successful placement (prevents cross-pit overflow)
-                    addAdjacentPositions(candidates, currentCandidate, clickedFace);
+                    addAdjacentPositions(candidates, currentCandidate, clickedFace, directionMode);
                 }
             }
         }
@@ -405,7 +445,25 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
         return placePositions;
     }
 
-    private void addAdjacentPositions(LinkedList<BlockPos> candidates, BlockPos pos, net.minecraft.core.Direction face) {
+    private void addAdjacentPositions(LinkedList<BlockPos> candidates, BlockPos pos, net.minecraft.core.Direction face, DirectionMode directionMode) {
+        switch (directionMode) {
+            case NORTH_SOUTH -> {
+                candidates.add(pos.north());
+                candidates.add(pos.south());
+            }
+            case EAST_WEST -> {
+                candidates.add(pos.east());
+                candidates.add(pos.west());
+            }
+            case VERTICAL -> {
+                candidates.add(pos.above());
+                candidates.add(pos.below());
+            }
+            case AUTO -> addAutoAdjacentPositions(candidates, pos, face);
+        }
+    }
+
+    private void addAutoAdjacentPositions(LinkedList<BlockPos> candidates, BlockPos pos, net.minecraft.core.Direction face) {
         switch (face) {
             case DOWN, UP -> {
                 candidates.add(pos.north());
@@ -441,8 +499,8 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
     }
 
     private InteractionResult handleFluidMultiPlacement(UseOnContext context, Player player, ItemStack wand,
-            appeng.api.storage.MEStorage storage, PlayerSource src, AEFluidKey aeFluidKey, 
-            int placementCount, double energyCost) {
+            appeng.api.storage.MEStorage storage, PlayerSource src, AEFluidKey aeFluidKey,
+            int placementCount, double energyCost, DirectionMode directionMode) {
         Level level = context.getLevel();
         var fluid = aeFluidKey.getFluid();
 
@@ -457,8 +515,8 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
         var clickedState = level.getBlockState(clickedPos);
 
         // Find all fluid placement positions
-        List<BlockPos> placePositions = calculateFluidPlacementPositions(level, clickedPos, clickedFace, 
-                clickedState, fluid, legacyBlock, placementCount);
+        List<BlockPos> placePositions = calculateFluidPlacementPositions(level, clickedPos, clickedFace,
+                clickedState, fluid, legacyBlock, placementCount, directionMode);
 
         if (placePositions.isEmpty()) {
             player.displayClientMessage(Component.translatable("message.meplacementtool.cannot_place"), true);
@@ -511,10 +569,10 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
         return InteractionResult.sidedSuccess(false);
     }
 
-    private List<BlockPos> calculateFluidPlacementPositions(Level level, BlockPos clickedPos, 
+    private List<BlockPos> calculateFluidPlacementPositions(Level level, BlockPos clickedPos,
             net.minecraft.core.Direction clickedFace, net.minecraft.world.level.block.state.BlockState clickedState,
-            net.minecraft.world.level.material.Fluid fluid, net.minecraft.world.level.block.state.BlockState legacyBlock, 
-            int maxCount) {
+            net.minecraft.world.level.material.Fluid fluid, net.minecraft.world.level.block.state.BlockState legacyBlock,
+            int maxCount, DirectionMode directionMode) {
         LinkedList<BlockPos> candidates = new LinkedList<>();
         HashSet<BlockPos> allCandidates = new HashSet<>();
         ArrayList<BlockPos> placePositions = new ArrayList<>();
@@ -531,6 +589,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                 continue;
             }
 
+            // Same supporting-block rule as the block path
             BlockPos supportingPoint = currentCandidate.relative(clickedFace.getOpposite());
             var supportingState = level.getBlockState(supportingPoint);
 
@@ -553,7 +612,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
                 if (canPlace) {
                     placePositions.add(currentCandidate);
                     // Only expand candidates after successful placement (prevents cross-pit overflow)
-                    addAdjacentPositions(candidates, currentCandidate, clickedFace);
+                    addAdjacentPositions(candidates, currentCandidate, clickedFace, directionMode);
                 }
             }
         }
@@ -562,8 +621,8 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
     }
 
     private InteractionResult handleFluidIdMultiPlacement(UseOnContext context, Player player, ItemStack wand,
-            appeng.api.storage.MEStorage storage, PlayerSource src, String fluidId, 
-            int placementCount, double energyCost) {
+            appeng.api.storage.MEStorage storage, PlayerSource src, String fluidId,
+            int placementCount, double energyCost, DirectionMode directionMode) {
         try {
             var fid = ResourceLocation.tryParse(fluidId);
             if (fid == null) {
@@ -578,7 +637,7 @@ public class ItemMultiblockPlacementTool extends BasePlacementToolItem implement
             }
 
             var aeFluidKey = AEFluidKey.of(fluid);
-            return handleFluidMultiPlacement(context, player, wand, storage, src, aeFluidKey, placementCount, energyCost);
+            return handleFluidMultiPlacement(context, player, wand, storage, src, aeFluidKey, placementCount, energyCost, directionMode);
         } catch (Exception e) {
             LOGGER.warn("Error resolving fluid {}", fluidId, e);
             player.displayClientMessage(Component.translatable("message.meplacementtool.unsupported_target"), true);

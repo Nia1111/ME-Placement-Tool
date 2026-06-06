@@ -32,6 +32,12 @@ public class ModNetwork {
         );
 
         registrar.playToServer(
+                UpdateDirectionModePayload.TYPE,
+                UpdateDirectionModePayload.STREAM_CODEC,
+                UpdateDirectionModePayload::handle
+        );
+
+        registrar.playToServer(
                 UndoPayload.TYPE,
                 UndoPayload.STREAM_CODEC,
                 UndoPayload::handle

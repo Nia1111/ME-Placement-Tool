@@ -233,6 +233,9 @@ public class WandMenu extends AbstractContainerMenu {
             if (existing.contains("PlacementCount")) {
                 combined.putInt("PlacementCount", existing.getInt("PlacementCount"));
             }
+            if (existing.contains("DirectionMode")) {
+                combined.putInt("DirectionMode", existing.getInt("DirectionMode"));
+            }
         }
 
         if (!player.level().isClientSide) {
@@ -271,6 +274,9 @@ public class WandMenu extends AbstractContainerMenu {
                 if (existing.contains("PlacementCount")) {
                     combined.putInt("PlacementCount", existing.getInt("PlacementCount"));
                 }
+                if (existing.contains("DirectionMode")) {
+                    combined.putInt("DirectionMode", existing.getInt("DirectionMode"));
+                }
             }
 
             wandStack.set(ModDataComponents.PLACEMENT_CONFIG.get(), combined);
@@ -279,6 +285,16 @@ public class WandMenu extends AbstractContainerMenu {
 
     @Override
     public boolean stillValid(Player player) {
-        return player.getMainHandItem() == this.wandStack;
+        // The menu is valid as long as the player still holds a placement tool in either hand.
+        // Reference equality on the stack is brittle: data-component sync paths can swap the
+        // ItemStack instance under us (hand swap, recipe adjustments, etc.) which would close the
+        // menu unexpectedly. Match by item type instead.
+        return isSupported(player.getMainHandItem()) || isSupported(player.getOffhandItem());
+    }
+
+    private static boolean isSupported(ItemStack stack) {
+        return !stack.isEmpty()
+                && (stack.getItem() instanceof ItemMEPlacementTool
+                        || stack.getItem() instanceof ItemMultiblockPlacementTool);
     }
 }

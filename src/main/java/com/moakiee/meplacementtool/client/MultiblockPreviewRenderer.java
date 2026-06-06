@@ -22,6 +22,7 @@ import net.neoforged.bus.api.SubscribeEvent;
 import net.neoforged.neoforge.client.event.RenderHighlightEvent;
 
 import com.moakiee.meplacementtool.ItemMultiblockPlacementTool;
+import com.moakiee.meplacementtool.ItemMultiblockPlacementTool.DirectionMode;
 import com.moakiee.meplacementtool.MEPlacementToolMod;
 
 import java.util.*;
@@ -34,6 +35,7 @@ public class MultiblockPreviewRenderer {
     private ItemStack lastWand;
     private Set<BlockPos> cachedPositions;
     private int lastPlacementCount;
+    private DirectionMode lastDirectionMode;
 
     @SubscribeEvent
     public void renderBlockHighlight(RenderHighlightEvent.Block event) {
@@ -47,15 +49,18 @@ public class MultiblockPreviewRenderer {
         if (wand.isEmpty() || wand.getItem() != MEPlacementToolMod.MULTIBLOCK_PLACEMENT_TOOL.get()) return;
 
         int placementCount = ItemMultiblockPlacementTool.getPlacementCount(wand);
+        DirectionMode directionMode = ItemMultiblockPlacementTool.getDirectionMode(wand);
 
         Set<BlockPos> blocks;
-        if (cachedPositions == null || !compareRTR(lastRayTraceResult, rtr) || 
-                !ItemStack.matches(lastWand, wand) || lastPlacementCount != placementCount) {
-            blocks = calculatePlacementPositions(player, rtr, wand, placementCount);
+        if (cachedPositions == null || !compareRTR(lastRayTraceResult, rtr) ||
+                !ItemStack.matches(lastWand, wand) || lastPlacementCount != placementCount ||
+                lastDirectionMode != directionMode) {
+            blocks = calculatePlacementPositions(player, rtr, wand, placementCount, directionMode);
             cachedPositions = blocks;
             lastRayTraceResult = rtr;
             lastWand = wand.copy();
             lastPlacementCount = placementCount;
+            lastDirectionMode = directionMode;
         } else {
             blocks = cachedPositions;
         }
@@ -79,7 +84,7 @@ public class MultiblockPreviewRenderer {
         event.setCanceled(true);
     }
 
-    private Set<BlockPos> calculatePlacementPositions(Player player, BlockHitResult rtr, ItemStack wand, int placementCount) {
+    private Set<BlockPos> calculatePlacementPositions(Player player, BlockHitResult rtr, ItemStack wand, int placementCount, DirectionMode directionMode) {
         Set<BlockPos> placePositions = new HashSet<>();
         if (placementCount <= 0) return placePositions;
 
@@ -104,6 +109,8 @@ public class MultiblockPreviewRenderer {
                 continue;
             }
 
+            // Match ConstructionWand: even when direction is locked, the supporting block
+            // (opposite the clicked face) must equal the clicked block.
             BlockPos supportingPoint = currentCandidate.relative(clickedFace.getOpposite());
             var supportingState = level.getBlockState(supportingPoint);
 
@@ -123,7 +130,7 @@ public class MultiblockPreviewRenderer {
                 if (canPlace) {
                     positions.add(currentCandidate);
                     // Only expand candidates after successful placement (prevents cross-pit overflow)
-                    addAdjacentPositions(candidates, currentCandidate, clickedFace);
+                    addAdjacentPositions(candidates, currentCandidate, clickedFace, directionMode);
                 }
             }
         }
@@ -132,7 +139,25 @@ public class MultiblockPreviewRenderer {
         return placePositions;
     }
 
-    private void addAdjacentPositions(LinkedList<BlockPos> candidates, BlockPos pos, Direction face) {
+    private void addAdjacentPositions(LinkedList<BlockPos> candidates, BlockPos pos, Direction face, DirectionMode directionMode) {
+        switch (directionMode) {
+            case NORTH_SOUTH -> {
+                candidates.add(pos.north());
+                candidates.add(pos.south());
+            }
+            case EAST_WEST -> {
+                candidates.add(pos.east());
+                candidates.add(pos.west());
+            }
+            case VERTICAL -> {
+                candidates.add(pos.above());
+                candidates.add(pos.below());
+            }
+            case AUTO -> addAutoAdjacentPositions(candidates, pos, face);
+        }
+    }
+
+    private void addAutoAdjacentPositions(LinkedList<BlockPos> candidates, BlockPos pos, Direction face) {
         switch (face) {
             case DOWN, UP -> {
                 candidates.add(pos.north());
@@ -177,5 +202,6 @@ public class MultiblockPreviewRenderer {
         lastRayTraceResult = null;
         lastWand = null;
         lastPlacementCount = 0;
+        lastDirectionMode = null;
     }
 }

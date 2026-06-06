@@ -14,6 +14,7 @@ import net.minecraft.world.item.ItemStack;
 import net.neoforged.neoforge.items.ItemStackHandler;
 import net.neoforged.neoforge.network.PacketDistributor;
 
+import com.moakiee.meplacementtool.ItemMEPlacementTool;
 import com.moakiee.meplacementtool.MEPlacementToolMod;
 import com.moakiee.meplacementtool.ModDataComponents;
 import com.moakiee.meplacementtool.WandMenu;
@@ -47,7 +48,10 @@ public class RadialMenuScreen extends Screen {
     public RadialMenuScreen() {
         super(Component.literal(""));
         this.minecraft = Minecraft.getInstance();
-        this.wandStack = minecraft.player != null ? minecraft.player.getMainHandItem() : ItemStack.EMPTY;
+        // Look up the wand from main hand first, off hand second, so the radial menu works in either hand.
+        this.wandStack = minecraft.player != null
+                ? com.moakiee.meplacementtool.BasePlacementToolItem.findHeldTool(minecraft.player, ItemMEPlacementTool.class)
+                : ItemStack.EMPTY;
         loadSlots();
         loadCurrentSelection();
     }
@@ -88,13 +92,18 @@ public class RadialMenuScreen extends Screen {
                  // Simplified item display for now, assuming standard items
                  slots.add(new SlotData(i, stack, stack.getHoverName().getString()));
             } else if (fluidId != null && !fluidId.isEmpty()) {
-                // Try to resolve fluid name - placeholder logic if actual fluid items aren't easily constructible without AE2 API details
-                // for 1.21.1 port, if we have fluid ID, we might display a bucket/droplet or just text
-                // For now, skip empty slots to match original behavior if no fluid item can be made easily
-                 try {
-                    // Primitive display for fluids if possible, or just ignore for now to prevent crashes
-                     // If we had a fluid container item, we'd use it.
-                } catch (Throwable ignored) {}
+                var rl = net.minecraft.resources.ResourceLocation.tryParse(fluidId);
+                if (rl != null) {
+                    var fluid = net.minecraft.core.registries.BuiltInRegistries.FLUID.get(rl);
+                    if (fluid != null && fluid != net.minecraft.world.level.material.Fluids.EMPTY) {
+                        var aeFluidKey = appeng.api.stacks.AEFluidKey.of(fluid);
+                        var genericStack = new appeng.api.stacks.GenericStack(
+                                aeFluidKey, appeng.api.stacks.AEFluidKey.AMOUNT_BLOCK);
+                        ItemStack displayStack = appeng.api.stacks.GenericStack.wrapInItemStack(genericStack);
+                        slots.add(new SlotData(i, displayStack,
+                                aeFluidKey.getDisplayName().getString()));
+                    }
+                }
             }
         }
     }

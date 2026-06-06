@@ -176,6 +176,11 @@ public class ToolInfoHudRenderer {
         // Add placement count
         int placementCount = ItemMultiblockPlacementTool.getPlacementCount(tool);
         lines.add(Component.translatable("meplacementtool.hud.placement_count", placementCount).getString());
+
+        // Add direction mode
+        ItemMultiblockPlacementTool.DirectionMode direction = ItemMultiblockPlacementTool.getDirectionMode(tool);
+        String directionName = Component.translatable(direction.translationKey()).getString();
+        lines.add(Component.translatable("meplacementtool.hud.direction", directionName).getString());
     }
 
     /**

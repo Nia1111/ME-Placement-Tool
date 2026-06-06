@@ -3,7 +3,6 @@ package com.moakiee.meplacementtool.client;
 import com.moakiee.meplacementtool.BasePlacementToolItem;
 import com.moakiee.meplacementtool.ItemMECablePlacementTool;
 import com.moakiee.meplacementtool.ItemMultiblockPlacementTool;
-import com.moakiee.meplacementtool.MEPlacementToolMod;
 import com.moakiee.meplacementtool.network.OpenCableToolGuiPayload;
 import com.mojang.blaze3d.platform.InputConstants;
 import net.minecraft.client.Minecraft;
@@ -15,7 +14,7 @@ import net.neoforged.neoforge.network.PacketDistributor;
  * Handler for radial menu and GUI key functionality.
  * Opens the radial menu when G is pressed while holding ME Placement Tool or Multiblock Placement Tool.
  * Opens the GUI screen when G is pressed while holding ME Cable Placement Tool.
- * 
+ *
  * Uses key input events instead of tick-based checking to properly handle
  * the same key being used to both open and close the GUI.
  */
@@ -32,22 +31,18 @@ public class RadialMenuKeyHandler {
         // Don't open if another screen is already open
         if (mc.screen != null) return;
 
-        var mainHandItem = mc.player.getMainHandItem();
-        if (mainHandItem.isEmpty()) return;
+        // Resolve the held placement tool from main hand first, off hand second.
+        var held = BasePlacementToolItem.findHeldTool(mc.player, BasePlacementToolItem.class);
+        if (held.isEmpty()) return;
 
         // Handle Cable Placement Tool - opens GUI directly
-        if (mainHandItem.getItem() instanceof ItemMECablePlacementTool) {
+        if (held.getItem() instanceof ItemMECablePlacementTool) {
             if (ModKeyBindings.OPEN_CABLE_TOOL_GUI.matches(event.getKey(), event.getScanCode())) {
                 // Send packet to server to open the menu
                 PacketDistributor.sendToServer(new OpenCableToolGuiPayload());
                 return;
             }
-        }
-
-        // Handle other placement tools - open radial menu
-        // Exclude cable tool - it has its own GUI and should not trigger radial menu
-        if (!(mainHandItem.getItem() instanceof BasePlacementToolItem)
-            || mainHandItem.getItem() instanceof ItemMECablePlacementTool) {
+            // Cable tool has its own GUI; do not trigger radial menu for it.
             return;
         }
 
@@ -56,7 +51,7 @@ public class RadialMenuKeyHandler {
         }
 
         // Open radial menu based on tool type
-        if (mainHandItem.getItem() instanceof ItemMultiblockPlacementTool) {
+        if (held.getItem() instanceof ItemMultiblockPlacementTool) {
             mc.setScreen(new DualLayerRadialMenuScreen());
         } else {
             mc.setScreen(new RadialMenuScreen());

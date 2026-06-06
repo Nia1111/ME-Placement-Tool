@@ -51,10 +51,7 @@ public record OpenCableToolGuiPayload() implements CustomPacketPayload {
                     player.openMenu(new SimpleMenuProvider(
                             (id, inv, p) -> new CableToolMenu(id, inv, finalTool, finalSlot),
                             Component.translatable("gui.meplacementtool.cable_tool")
-                    ), buf -> {
-                        buf.writeInt(finalSlot);
-                        buf.writeInt(finalSlot);
-                    });
+                    ), buf -> buf.writeInt(finalSlot));
                 }
             }
         });

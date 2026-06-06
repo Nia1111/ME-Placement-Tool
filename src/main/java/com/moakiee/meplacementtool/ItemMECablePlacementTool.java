@@ -30,6 +30,7 @@ import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.InteractionResult;
 import net.minecraft.world.InteractionResultHolder;
+import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.DyeItem;
 import net.minecraft.world.item.Item;
@@ -204,7 +205,10 @@ public class ItemMECablePlacementTool extends BasePlacementToolItem implements I
                         setPoint1(stack, null);
                         setPoint2(stack, null);
                         // Sync cleared points to client
-                        syncPointsToClient(serverPlayer, player.getInventory().selected);
+                        int slot = hand == InteractionHand.OFF_HAND
+                                ? Inventory.SLOT_OFFHAND
+                                : player.getInventory().selected;
+                        syncPointsToClient(serverPlayer, slot);
                     }
                     return InteractionResultHolder.success(stack);
                 }
@@ -224,12 +228,18 @@ public class ItemMECablePlacementTool extends BasePlacementToolItem implements I
         if (level.isClientSide) {
             return InteractionResult.SUCCESS;
         }
+        if (!(player instanceof ServerPlayer serverPlayer)) {
+            return InteractionResult.PASS;
+        }
+        int slot = context.getHand() == InteractionHand.OFF_HAND
+                ? Inventory.SLOT_OFFHAND
+                : player.getInventory().selected;
 
         // Get the position using smart target logic
         BlockPos clickedPos = context.getClickedPos();
         Direction face = context.getClickedFace();
         BlockPos targetPos = getSmartTargetPos(level, clickedPos, face);
-        
+
         PlacementMode mode = getMode(stack);
         BlockPos p1 = getPoint1(stack);
         BlockPos p2 = getPoint2(stack);
@@ -239,22 +249,22 @@ public class ItemMECablePlacementTool extends BasePlacementToolItem implements I
             if (p1 == null) {
                 setPoint1(stack, targetPos);
                 player.displayClientMessage(Component.translatable("message.meplacementtool.branch_point1_set", targetPos.toShortString()), true);
-                syncPointsToClient((ServerPlayer) player, player.getInventory().selected);
+                syncPointsToClient(serverPlayer, slot);
             } else if (p2 == null) {
                 setPoint2(stack, targetPos);
                 player.displayClientMessage(Component.translatable("message.meplacementtool.branch_point2_set", targetPos.toShortString()), true);
-                syncPointsToClient((ServerPlayer) player, player.getInventory().selected);
+                syncPointsToClient(serverPlayer, slot);
             } else {
                 setPoint3(stack, targetPos);
                 player.displayClientMessage(Component.translatable("message.meplacementtool.branch_point3_set", targetPos.toShortString()), true);
-                boolean craftingTriggered = executeBranchPlacement((ServerPlayer) player, stack, level, p1, p2, targetPos);
+                boolean craftingTriggered = executeBranchPlacement(serverPlayer, stack, level, p1, p2, targetPos);
                 // Only clear points if crafting was NOT triggered
                 if (!craftingTriggered) {
                     setPoint1(stack, null);
                     setPoint2(stack, null);
                     setPoint3(stack, null);
                     // Sync cleared points to client
-                    syncPointsToClient((ServerPlayer) player, player.getInventory().selected);
+                    syncPointsToClient(serverPlayer, slot);
                 }
             }
         } else if (mode == PlacementMode.LINE) {
@@ -262,7 +272,7 @@ public class ItemMECablePlacementTool extends BasePlacementToolItem implements I
             if (p1 == null) {
                 setPoint1(stack, targetPos);
                 player.displayClientMessage(Component.translatable("message.meplacementtool.point1_set", targetPos.toShortString()), true);
-                syncPointsToClient((ServerPlayer) player, player.getInventory().selected);
+                syncPointsToClient(serverPlayer, slot);
             } else {
                 // Use player look direction to determine endpoint
                 BlockPos endpoint = findLine(player, p1);
@@ -270,19 +280,19 @@ public class ItemMECablePlacementTool extends BasePlacementToolItem implements I
                 if (endpoint != null) {
                     setPoint2(stack, endpoint);
                     player.displayClientMessage(Component.translatable("message.meplacementtool.point2_set", endpoint.toShortString()), true);
-                    craftingTriggered = executePlacement((ServerPlayer) player, stack, level, p1, endpoint);
+                    craftingTriggered = executePlacement(serverPlayer, stack, level, p1, endpoint);
                 } else {
                     // Fallback: use clicked position
                     setPoint2(stack, targetPos);
                     player.displayClientMessage(Component.translatable("message.meplacementtool.point2_set", targetPos.toShortString()), true);
-                    craftingTriggered = executePlacement((ServerPlayer) player, stack, level, p1, targetPos);
+                    craftingTriggered = executePlacement(serverPlayer, stack, level, p1, targetPos);
                 }
                 // Only clear points if crafting was NOT triggered
                 if (!craftingTriggered) {
                     setPoint1(stack, null);
                     setPoint2(stack, null);
                     // Sync cleared points to client
-                    syncPointsToClient((ServerPlayer) player, player.getInventory().selected);
+                    syncPointsToClient(serverPlayer, slot);
                 }
             }
         } else {
@@ -290,17 +300,17 @@ public class ItemMECablePlacementTool extends BasePlacementToolItem implements I
             if (p1 == null) {
                 setPoint1(stack, targetPos);
                 player.displayClientMessage(Component.translatable("message.meplacementtool.point1_set", targetPos.toShortString()), true);
-                syncPointsToClient((ServerPlayer) player, player.getInventory().selected);
+                syncPointsToClient(serverPlayer, slot);
             } else {
                 setPoint2(stack, targetPos);
                 player.displayClientMessage(Component.translatable("message.meplacementtool.point2_set", targetPos.toShortString()), true);
-                boolean craftingTriggered = executePlacement((ServerPlayer) player, stack, level, p1, targetPos);
+                boolean craftingTriggered = executePlacement(serverPlayer, stack, level, p1, targetPos);
                 // Only clear points if crafting was NOT triggered
                 if (!craftingTriggered) {
                     setPoint1(stack, null);
                     setPoint2(stack, null);
                     // Sync cleared points to client
-                    syncPointsToClient((ServerPlayer) player, player.getInventory().selected);
+                    syncPointsToClient(serverPlayer, slot);
                 }
             }
         }
@@ -723,7 +733,9 @@ public class ItemMECablePlacementTool extends BasePlacementToolItem implements I
      * This ensures client has correct state even if Data Components sync is delayed.
      */
     public static void syncPointsToClient(ServerPlayer player, int slot) {
-        ItemStack stack = player.getInventory().getItem(slot);
+        ItemStack stack = slot == Inventory.SLOT_OFFHAND
+                ? player.getOffhandItem()
+                : player.getInventory().getItem(slot);
         if (stack.getItem() != MEPlacementToolMod.ME_CABLE_PLACEMENT_TOOL.get()) {
             return;
         }
